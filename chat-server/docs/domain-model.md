@@ -329,7 +329,26 @@ ChatReadSession.runtimeStatus:
 - read receipt count는 작성자 본인을 제외한다.
 ```
 
-### 7.5 unread count
+### 7.5 read cursor 갱신 기준
+
+`ChatReadCursor.lastReadSequence`는 다음 경로로 갱신될 수 있다.
+
+```text
+- 클라이언트의 markRead 요청
+- 서버가 VISIBLE ChatReadSession을 근거로 수행하는 자동 갱신
+```
+
+클라이언트는 새 메시지 수신마다 `markRead`를 호출하지 않는다.
+
+`ChatReadSession.runtimeStatus = VISIBLE`인 사용자는 현재 room 화면을 보고 있는 사용자로 간주할 수 있다.
+
+서버는 VISIBLE read session을 가진 사용자에게 새 메시지를 broadcast한 경우, 해당 사용자의 `ChatReadCursor.lastReadSequence`를 broadcast한 `roomSequence`까지 갱신할 수 있다.
+
+클라이언트는 room enter, reconnect, foreground 복귀, scroll-to-bottom, visibility 복귀 시 `markRead`를 호출해 read cursor를 보정할 수 있다.
+
+`ChatReadCursor.lastReadSequence`는 감소하지 않는다.
+
+### 7.6 unread count
 
 room별 unread count는 현재 사용자의 read cursor 이후 메시지 수로 계산한다.
 
@@ -342,9 +361,11 @@ message.roomSequence > max(
 
 현재 열린 `ChatParticipationPeriod`가 없는 사용자는 unread count를 계산하지 않는다.
 
-### 7.6 read receipt count
+### 7.7 read receipt count
 
-메시지별 read receipt count는 해당 메시지 roomSequence 이상을 읽은 멤버 수로 계산한다.
+메시지별 read receipt count는 해당 room에서 `ChatReadCursor.lastReadSequence`가 메시지의 `roomSequence` 이상인 멤버 수로 계산한다.
+
+어떤 사용자의 `ChatReadCursor.lastReadSequence`가 특정 메시지의 `roomSequence` 이상이면, 그 사용자는 해당 메시지를 읽은 것으로 본다.
 
 작성자 본인은 read receipt count에서 제외한다.
 
@@ -358,15 +379,17 @@ readReceiptCount =
 
 대형 room에서 메시지별 read receipt count 계산 비용이 커지는 경우 projection 또는 cache를 둘 수 있다.
 
-### 7.7 실시간 읽음 표시
+### 7.8 실시간 읽음 표시
 
-read cursor 갱신 결과는 direct WebSocket 이벤트로 전파할 수 있다.
+`ChatReadCursor`가 갱신되면 서버는 그 결과를 WebSocket으로 room 구독 클라이언트에게 알릴 수 있다.
+
+이 이벤트는 서버에서 클라이언트로 전달되는 실시간 표시용 이벤트다.
 
 읽음 관련 WebSocket 이벤트는 영속 전달 보장 대상이 아니다.
 
 읽음 이벤트가 유실되어도 메시지 조회 시 서버가 `ChatReadCursor` 기준으로 read receipt count를 다시 계산해 복구할 수 있다.
 
-### 7.8 관련 이벤트
+### 7.9 관련 이벤트
 
 ```text
 READ_CURSOR_UPDATED
