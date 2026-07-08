@@ -1139,17 +1139,21 @@ lastReadSequence가 현재 cursor보다 작거나 같은 경우 cursor 갱신은
 
 #### 목적
 
-WebSocket connection이 room 이벤트를 수신하도록 구독한다.
+현재 WebSocket connection이 특정 room의 실시간 이벤트를 수신할 수 있도록 구독 상태를 등록한다.
+
+subscribeRoom은 WebSocket connection context에서 처리하는 runtime command다.
 
 #### Actor
 
-인증된 connection
+인증된 WebSocket connection의 ACTIVE member
 
 #### 요청 필드
 
 ```text
 roomId
 ```
+
+connectionId는 request field로 받지 않고 현재 WebSocket connection context에서 얻는다.
 
 #### 사전 조건
 
@@ -1161,11 +1165,25 @@ roomId
 - 현재 열린 ChatParticipationPeriod가 존재해야 한다.
 ```
 
+`ChatRoom.operationStatus == SYSTEM_MANAGED`라도 기본적으로 ACTIVE member의 subscribeRoom은 허용한다.
+
+단, 서비스 정책 또는 운영 판단에 따라 SYSTEM_MANAGED room의 구독을 제한할 수 있다.
+
+CLOSED room은 subscribeRoom을 허용하지 않는다.
+
 #### 성공 시 상태 변화
 
 ```text
 - WebSocketSession.subscribedRoomIds에 roomId 추가
 ```
+
+room 구독 여부는 WebSocketSession.subscribedRoomIds로 판단한다.
+
+WebSocketSession.runtimeStatus는 connection 생명주기 상태를 나타낸다.
+
+subscribeRoom은 ChatReadSession을 VISIBLE로 만들지 않는다.
+
+클라이언트가 room 화면을 보고 있는 경우 subscribeRoom 성공 후 activateReadSession을 호출해야 한다.
 
 #### 관련 이벤트
 
@@ -1175,11 +1193,21 @@ roomId
 
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+이미 같은 roomId가 subscribedRoomIds에 있으면 성공 no-op으로 처리한다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- connection 인증 상태가 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- 서비스 정책 또는 운영 판단에 의해 현재 room의 구독이 제한되어 있다.
+- actor의 ChatRoomMembership이 존재하지 않는다.
+- actor의 ChatRoomMembership.status != ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재하지 않는다.
+```
 
 ---
 
@@ -1187,11 +1215,13 @@ roomId
 
 #### 목적
 
-WebSocket connection의 room 구독을 해제한다.
+현재 WebSocket connection이 특정 room 이벤트를 더 이상 수신하지 않도록 구독 상태를 해제한다.
+
+unsubscribeRoom은 구독 및 read session cleanup 성격의 runtime command다.
 
 #### Actor
 
-인증된 connection
+인증된 WebSocket connection
 
 #### 요청 필드
 
@@ -1199,17 +1229,31 @@ WebSocket connection의 room 구독을 해제한다.
 roomId
 ```
 
+connectionId는 request field로 받지 않고 현재 WebSocket connection context에서 얻는다.
+
 #### 사전 조건
 
 ```text
 - connection이 존재해야 한다.
+- roomId가 있어야 한다.
 ```
+
+room 또는 membership 상태가 이미 변경되었더라도 성공 no-op으로 처리할 수 있다.
 
 #### 성공 시 상태 변화
 
 ```text
 - WebSocketSession.subscribedRoomIds에서 roomId 제거
+- 해당 connectionId + roomId의 ChatReadSession.runtimeStatus = HIDDEN 또는 제거
 ```
+
+이미 구독 중이 아니면 성공 no-op으로 처리한다.
+
+unsubscribeRoom은 ChatReadCursor를 변경하지 않는다.
+
+마지막 읽음 보정은 deactivateReadSession 또는 markRead로 처리한다.
+
+클라이언트는 room 화면을 떠날 때 deactivateReadSession을 먼저 호출한 뒤 unsubscribeRoom을 호출하는 것을 권장한다.
 
 #### 관련 이벤트
 
@@ -1219,11 +1263,16 @@ roomId
 
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+이미 구독 중이 아니면 성공 no-op으로 처리한다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- connection이 존재하지 않는다.
+- roomId가 없다.
+```
 
 ---
 
