@@ -262,7 +262,7 @@ ChatMessage.visibility:
 - 같은 roomId + senderUserId + clientMessageId는 하나의 message만 가리킨다.
 - clientMessageId는 같은 메시지 전송 요청이 중복 도착해도 메시지가 중복 생성되지 않도록 하는 클라이언트 생성 식별자다.
 - ChatMessage.senderUserId는 메시지 생성 시점에 해당 room의 ACTIVE member여야 한다.
-- editVersion은 메시지 수정 시 동시 수정 충돌을 감지하기 위한 버전 값이다.
+- editVersion은 메시지 변경 시 동시성 충돌을 감지하기 위한 버전 값이다.
 - 삭제된 메시지는 물리 삭제하지 않는다.
 - 일반 사용자 응답에서는 삭제된 메시지의 content를 노출하지 않는다.
 ```

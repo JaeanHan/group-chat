@@ -679,11 +679,15 @@ roomId + senderUserId + clientMessageId
 
 #### 목적
 
-작성자가 자신이 보낸 메시지를 수정한다.
+작성자가 VISIBLE 상태의 TEXT 메시지 content를 수정한다.
 
 #### Actor
 
 message sender
+
+OPERATOR도 메시지 content를 수정할 수 없다.
+
+작성자라도 현재 room의 ACTIVE member여야 수정할 수 있다.
 
 #### 요청 필드
 
@@ -700,19 +704,35 @@ content
 - room이 존재해야 한다.
 - room.status == ACTIVE
 - message가 존재해야 한다.
+- message.roomId == roomId
 - actor가 message sender여야 한다.
+- actor의 ChatRoomMembership.status == ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재해야 한다.
+- message.roomSequence가 현재 ChatParticipationPeriod 범위 안에 있어야 한다.
+- ChatMessage.type == TEXT
 - ChatMessage.visibility == VISIBLE
+- editVersion이 있어야 한다.
 - editVersion이 현재 메시지 버전과 일치해야 한다.
-- content가 유효해야 한다.
+- content는 빈 문자열 또는 trim 후 빈 문자열이면 안 된다.
+- content는 서비스 정책의 최대 길이 이하여야 한다.
 ```
+
+`ChatRoom.operationStatus == SYSTEM_MANAGED`라도 기본적으로 ACTIVE member의 editMessage는 허용한다.
+
+단, 서비스 정책 또는 운영 판단에 따라 SYSTEM_MANAGED room의 메시지 수정을 제한할 수 있다.
+
+editVersion은 클라이언트가 기준으로 삼은 메시지 버전이며, optimistic locking에 사용한다.
 
 #### 성공 시 상태 변화
 
 ```text
-- ChatMessage.content 변경
-- ChatMessage.editVersion 증가
-- ChatMessage.editedAt 기록
+- 새 content가 기존 content와 다르면 ChatMessage.content 변경
+- content가 실제 변경된 경우 ChatMessage.editVersion 증가
+- content가 실제 변경된 경우 ChatMessage.editedAt 기록
+- 새 content가 기존 content와 같으면 성공 no-op
 ```
+
+editMessage는 ChatReadCursor를 변경하지 않는다.
 
 #### 관련 이벤트
 
@@ -720,13 +740,46 @@ content
 MESSAGE_EDITED
 ```
 
+MESSAGE_EDITED는 content가 실제 변경된 경우에만 생성한다.
+
+MESSAGE_EDITED는 영속 전달 보장 대상이다.
+
+ChatMessage 수정과 MESSAGE_EDITED 이벤트 발행 요청 기록은 같은 DB transaction에서 확정한다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+editVersion이 현재 메시지 버전과 일치할 때만 수정한다.
+
+수정 성공 시 editVersion을 증가시킨다.
+
+editVersion이 일치하지 않으면 충돌로 처리한다.
+
+같은 content로 수정 요청이 들어오면 성공 no-op으로 처리하고 editVersion을 증가시키지 않는다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- 서비스 정책 또는 운영 판단에 의해 현재 room의 메시지 수정이 제한되어 있다.
+- message가 존재하지 않는다.
+- message.roomId != roomId
+- actor가 message sender가 아니다.
+- actor의 ChatRoomMembership이 존재하지 않는다.
+- actor의 ChatRoomMembership.status != ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재하지 않는다.
+- message.roomSequence가 현재 ChatParticipationPeriod 범위 밖이다.
+- ChatMessage.type != TEXT
+- ChatMessage.visibility != VISIBLE
+- editVersion이 없다.
+- editVersion이 현재 메시지 버전과 일치하지 않는다.
+- content가 빈 문자열이거나 trim 후 빈 문자열이다.
+- content가 서비스 정책의 최대 길이를 초과한다.
+- 서비스 정책상 수정 가능 조건을 만족하지 않는다.
+```
 
 ---
 
@@ -734,17 +787,22 @@ MESSAGE_EDITED
 
 #### 목적
 
-작성자가 자신이 보낸 메시지를 삭제한다.
+작성자가 VISIBLE 상태의 메시지를 삭제 표시 상태로 전환한다.
 
 #### Actor
 
 message sender
+
+OPERATOR의 운영 삭제 또는 숨김 처리는 현재 core deleteMessage 범위에 포함하지 않으며, 향후 moderateMessage로 분리한다.
+
+작성자라도 현재 room의 ACTIVE member여야 삭제할 수 있다.
 
 #### 요청 필드
 
 ```text
 roomId
 messageId
+editVersion
 ```
 
 #### 사전 조건
@@ -753,16 +811,32 @@ messageId
 - room이 존재해야 한다.
 - room.status == ACTIVE
 - message가 존재해야 한다.
+- message.roomId == roomId
 - actor가 message sender여야 한다.
+- actor의 ChatRoomMembership.status == ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재해야 한다.
+- message.roomSequence가 현재 ChatParticipationPeriod 범위 안에 있어야 한다.
+- editVersion이 있어야 한다.
+- editVersion이 현재 메시지 버전과 일치해야 한다.
 ```
+
+`ChatRoom.operationStatus == SYSTEM_MANAGED`라도 기본적으로 ACTIVE member의 deleteMessage는 허용한다.
+
+단, 서비스 정책 또는 운영 판단에 따라 SYSTEM_MANAGED room의 메시지 삭제를 제한할 수 있다.
 
 #### 성공 시 상태 변화
 
 ```text
-- ChatMessage.visibility = DELETED_BY_USER
-- ChatMessage.deletedAt 기록
+- ChatMessage.visibility == VISIBLE이면 ChatMessage.visibility = DELETED_BY_USER
+- visibility가 실제 변경된 경우 ChatMessage.editVersion 증가
+- visibility가 실제 변경된 경우 ChatMessage.deletedAt 기록
 - 일반 사용자 응답에서 content 비노출
+- ChatMessage.visibility == DELETED_BY_USER이면 성공 no-op
 ```
+
+deleteMessage는 물리 삭제하지 않는다.
+
+deleteMessage는 ChatReadCursor를 변경하지 않는다.
 
 #### 관련 이벤트
 
@@ -770,13 +844,42 @@ messageId
 MESSAGE_DELETED_BY_USER
 ```
 
+MESSAGE_DELETED_BY_USER는 visibility가 실제 변경된 경우에만 생성한다.
+
+MESSAGE_DELETED_BY_USER는 영속 전달 보장 대상이다.
+
+ChatMessage visibility 변경과 MESSAGE_DELETED_BY_USER 이벤트 발행 요청 기록은 같은 DB transaction에서 확정한다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+editVersion이 현재 메시지 버전과 일치할 때만 삭제한다.
+
+삭제 성공 시 editVersion을 증가시킨다.
+
+editVersion이 일치하지 않으면 충돌로 처리한다.
+
+이미 DELETED_BY_USER인 메시지에 대한 deleteMessage 재호출은 성공 no-op으로 처리하고 editVersion을 증가시키지 않는다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- 서비스 정책 또는 운영 판단에 의해 현재 room의 메시지 삭제가 제한되어 있다.
+- message가 존재하지 않는다.
+- message.roomId != roomId
+- actor가 message sender가 아니다.
+- actor의 ChatRoomMembership이 존재하지 않는다.
+- actor의 ChatRoomMembership.status != ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재하지 않는다.
+- message.roomSequence가 현재 ChatParticipationPeriod 범위 밖이다.
+- editVersion이 없다.
+- editVersion이 현재 메시지 버전과 일치하지 않는다.
+- 서비스 정책상 삭제 가능 조건을 만족하지 않는다.
+```
 
 ---
 
