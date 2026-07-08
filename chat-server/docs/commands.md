@@ -59,6 +59,7 @@ Idempotency
 createRoom
 closeRoom
 transferOwner
+markRoomSystemManaged
 ```
 
 ### 4.2 참여자
@@ -80,6 +81,8 @@ deleteMessage
 
 ```text
 markRead
+activateReadSession
+deactivateReadSession
 ```
 
 ### 4.5 실시간 연결
@@ -240,6 +243,54 @@ ROOM_OWNER_TRANSFERRED
 
 ---
 
+### 5.4 markRoomSystemManaged
+
+#### 목적
+
+owner 비활성화 등 시스템 또는 운영 판단으로 room을 운영자 조치 필요 상태로 전환한다.
+
+#### Actor
+
+SYSTEM 또는 OPERATOR
+
+#### 요청 필드
+
+```text
+roomId
+reason
+```
+
+#### 사전 조건
+
+```text
+- room이 존재해야 한다.
+- room.status == ACTIVE
+- ChatRoom.operationStatus == NORMAL
+- owner가 owner 역할을 수행할 수 없는 상태여야 한다.
+```
+
+#### 성공 시 상태 변화
+
+```text
+- ChatRoom.operationStatus = SYSTEM_MANAGED
+```
+
+#### 관련 이벤트
+
+```text
+ROOM_SYSTEM_MANAGED
+```
+
+#### Idempotency
+
+정의 예정
+
+#### 실패 기준
+
+정의 예정
+
+---
+
 ## 6. 참여자 Commands
 
 ### 6.1 joinRoom
@@ -351,6 +402,10 @@ ROOM_LEFT
 
 ACTIVE member
 
+`senderUserId`는 request body에서 받지 않고 인증 token의 userId를 사용한다.
+
+owner도 ACTIVE member이면 일반 member와 동일하게 메시지를 전송할 수 있다.
+
 #### 요청 필드
 
 ```text
@@ -365,26 +420,49 @@ content
 ```text
 - room이 존재해야 한다.
 - room.status == ACTIVE
-- ChatRoom.operationStatus에서 메시지 전송이 허용되어야 한다.
 - actor의 ChatRoomMembership.status == ACTIVE
 - 현재 열린 ChatParticipationPeriod가 존재해야 한다.
 - clientMessageId가 있어야 한다.
-- type과 content가 유효해야 한다.
+- type == TEXT
+- content는 빈 문자열 또는 trim 후 빈 문자열이면 안 된다.
+- content는 서비스 정책의 최대 길이 이하여야 한다.
 ```
+
+`ChatRoom.operationStatus == SYSTEM_MANAGED`라도 기본적으로 기존 ACTIVE member의 메시지 전송은 허용한다.
+
+단, 서비스 정책 또는 운영 판단에 따라 SYSTEM_MANAGED room의 메시지 전송을 제한할 수 있다.
 
 #### 성공 시 상태 변화
 
 ```text
+- senderUserId = authenticatedUser.userId
 - ChatMessage 생성
+- ChatMessage.type = TEXT
+- ChatMessage.visibility = VISIBLE
+- ChatMessage.editVersion = 0
+- ChatMessage.sentAt 기록
 - roomSequence 부여
 - ChatRoom.lastMessageSequence 갱신
+- sender의 ChatReadCursor.lastReadSequence를 새 roomSequence까지 갱신
 ```
+
+ChatMessage 생성과 ChatRoom.lastMessageSequence 갱신은 같은 DB transaction에서 확정한다.
+
+sender가 보낸 메시지는 sender가 읽은 메시지로 본다.
+
+다른 사용자의 VISIBLE ChatReadSession 기반 read cursor 자동 갱신은 sendMessage command의 상태 변화에 포함하지 않는다.
+
+다른 사용자의 자동 읽음 처리는 메시지 broadcast/read-session 처리 단계에서 수행한다.
 
 #### 관련 이벤트
 
 ```text
 MESSAGE_SENT
 ```
+
+MESSAGE_SENT는 영속 전달 보장 대상이다.
+
+ChatMessage 생성과 MESSAGE_SENT 이벤트 발행 요청 기록은 같은 DB transaction에서 확정한다.
 
 #### Idempotency
 
@@ -394,11 +472,28 @@ roomId + senderUserId + clientMessageId
 
 동일 key로 이미 생성된 메시지가 있으면 새 메시지를 만들지 않고 기존 메시지를 반환한다.
 
-동일 key에 다른 payload가 들어오면 충돌로 처리한다.
+동일 key에 같은 `type + content`가 들어오면 같은 요청으로 본다.
+
+동일 key에 다른 `type + content`가 들어오면 충돌로 처리한다.
+
+`sentAt`, `messageId`, `roomSequence`는 서버 생성 값이므로 idempotency payload 비교 기준에 포함하지 않는다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- 서비스 정책 또는 운영 판단에 의해 현재 room의 메시지 전송이 제한되어 있다.
+- actor의 ChatRoomMembership이 존재하지 않는다.
+- actor의 ChatRoomMembership.status != ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재하지 않는다.
+- clientMessageId가 없다.
+- type이 TEXT가 아니다.
+- content가 빈 문자열이거나 trim 후 빈 문자열이다.
+- content가 서비스 정책의 최대 길이를 초과한다.
+- 같은 roomId + senderUserId + clientMessageId로 이미 생성된 메시지가 있고, 기존 메시지의 type + content와 현재 요청의 type + content가 다르다.
+```
 
 ---
 
@@ -513,7 +608,7 @@ MESSAGE_DELETED_BY_USER
 
 #### 목적
 
-사용자가 room에서 특정 sequence까지 읽었음을 기록한다.
+클라이언트가 사용자가 실제로 확인한 마지막 메시지 sequence를 서버에 알려 read cursor를 보정한다.
 
 #### Actor
 
@@ -526,6 +621,10 @@ roomId
 lastReadSequence
 ```
 
+`lastReadSequence`는 클라이언트가 사용자가 실제로 확인한 마지막 visible message sequence로 보낸 값이다.
+
+서버는 이 값을 검증한 뒤 `ChatReadCursor.lastReadSequence`에 반영한다.
+
 #### 사전 조건
 
 ```text
@@ -533,15 +632,25 @@ lastReadSequence
 - room.status == ACTIVE
 - actor의 ChatRoomMembership.status == ACTIVE
 - 현재 열린 ChatParticipationPeriod가 존재해야 한다.
-- lastReadSequence가 현재 ChatParticipationPeriod 범위 안에 있어야 한다.
+- lastReadSequence가 있어야 한다.
+- lastReadSequence는 숫자여야 한다.
+- lastReadSequence >= currentChatParticipationPeriod.joinedSequence
+- lastReadSequence <= ChatRoom.lastMessageSequence
 ```
+
+`ChatRoom.operationStatus == SYSTEM_MANAGED`라도 기본적으로 ACTIVE member의 markRead는 허용한다.
+
+단, 서비스 정책 또는 운영 판단에 따라 SYSTEM_MANAGED room의 읽음 처리를 제한할 수 있다.
 
 #### 성공 시 상태 변화
 
 ```text
-- ChatReadCursor.lastReadSequence 갱신
-- 기존 값보다 작은 sequence로는 갱신하지 않음
+- lastReadSequence > current ChatReadCursor.lastReadSequence이면 ChatReadCursor.lastReadSequence 갱신
+- cursor가 실제로 증가한 경우에만 ChatReadCursor.readAt 갱신
+- lastReadSequence <= current ChatReadCursor.lastReadSequence이면 성공 no-op
 ```
+
+`ChatReadCursor.lastReadSequence`는 감소하지 않는다.
 
 #### 관련 이벤트
 
@@ -550,13 +659,196 @@ READ_CURSOR_UPDATED
 READ_RECEIPT_UPDATED
 ```
 
+cursor가 실제로 증가한 경우에만 읽음 관련 이벤트를 생성할 수 있다.
+
+READ_CURSOR_UPDATED는 같은 user의 다른 connection 또는 요청 client의 cursor 동기화에 사용한다.
+
+READ_RECEIPT_UPDATED는 room 구독자의 메시지별 read receipt count 갱신에 사용한다.
+
+두 이벤트는 실시간 표시 보조 이벤트이며, 영속 전달 보장 대상은 아니다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+`ChatReadCursor.lastReadSequence`가 감소하지 않는 monotonic update이므로 같은 요청을 반복해도 같은 결과가 된다.
+
+현재 cursor보다 작거나 같은 sequence는 성공 no-op으로 처리한다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- 서비스 정책 또는 운영 판단에 의해 현재 room의 읽음 처리가 제한되어 있다.
+- actor의 ChatRoomMembership이 존재하지 않는다.
+- actor의 ChatRoomMembership.status != ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재하지 않는다.
+- lastReadSequence가 없다.
+- lastReadSequence가 숫자가 아니다.
+- lastReadSequence < currentChatParticipationPeriod.joinedSequence
+- lastReadSequence > ChatRoom.lastMessageSequence
+```
+
+---
+
+### 8.2 activateReadSession
+
+#### 목적
+
+현재 WebSocket connection에서 사용자가 특정 room 화면을 보고 있음을 서버에 알린다.
+
+activateReadSession은 WebSocket connection context에서 처리하는 runtime command다.
+
+#### Actor
+
+ACTIVE member
+
+#### 요청 필드
+
+```text
+roomId
+lastReadSequence optional
+```
+
+connectionId는 request field로 받지 않고 현재 WebSocket connection context에서 얻는다.
+
+lastReadSequence가 제공되면 클라이언트가 room 화면 진입 시 실제로 확인한 마지막 메시지 sequence로 본다.
+
+#### 사전 조건
+
+```text
+- connection의 인증 상태가 유효해야 한다.
+- room이 존재해야 한다.
+- room.status == ACTIVE
+- actor의 ChatRoomMembership.status == ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재해야 한다.
+- lastReadSequence가 제공된 경우 숫자여야 한다.
+- lastReadSequence가 제공된 경우 lastReadSequence >= currentChatParticipationPeriod.joinedSequence
+- lastReadSequence가 제공된 경우 lastReadSequence <= ChatRoom.lastMessageSequence
+```
+
+`ChatRoom.operationStatus == SYSTEM_MANAGED`라도 기본적으로 ACTIVE member의 activateReadSession은 허용한다.
+
+단, 서비스 정책 또는 운영 판단에 따라 SYSTEM_MANAGED room의 읽음 처리를 제한할 수 있다.
+
+#### 성공 시 상태 변화
+
+```text
+- 현재 connectionId + userId + roomId 기준 ChatReadSession 생성 또는 갱신
+- ChatReadSession.runtimeStatus = VISIBLE
+- lastReadSequence가 제공되고 현재 cursor보다 크면 ChatReadCursor.lastReadSequence 갱신
+- cursor가 실제로 증가한 경우에만 ChatReadCursor.readAt 갱신
+```
+
+이미 VISIBLE 상태이면 성공 no-op으로 처리한다.
+
+#### 관련 이벤트
+
+```text
+없음
+```
+
+ChatReadSession만 VISIBLE로 변경된 경우 관련 이벤트는 생성하지 않는다.
+
+lastReadSequence로 ChatReadCursor가 실제 증가한 경우 READ_CURSOR_UPDATED, READ_RECEIPT_UPDATED를 생성할 수 있다.
+
+#### Idempotency
+
+별도 idempotency key는 사용하지 않는다.
+
+이미 VISIBLE이면 성공 no-op으로 처리한다.
+
+lastReadSequence가 현재 cursor보다 작거나 같은 경우 cursor 갱신은 성공 no-op으로 처리한다.
+
+#### 실패 기준
+
+```text
+- connection 인증 상태가 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- 서비스 정책 또는 운영 판단에 의해 현재 room의 읽음 처리가 제한되어 있다.
+- actor의 ChatRoomMembership이 존재하지 않는다.
+- actor의 ChatRoomMembership.status != ACTIVE
+- 현재 열린 ChatParticipationPeriod가 존재하지 않는다.
+- lastReadSequence가 제공된 경우 숫자가 아니다.
+- lastReadSequence가 제공된 경우 lastReadSequence < currentChatParticipationPeriod.joinedSequence
+- lastReadSequence가 제공된 경우 lastReadSequence > ChatRoom.lastMessageSequence
+```
+
+---
+
+### 8.3 deactivateReadSession
+
+#### 목적
+
+현재 WebSocket connection에서 사용자가 특정 room 화면을 더 이상 보고 있지 않음을 서버에 알린다.
+
+deactivateReadSession은 자동 읽음 처리 대상에서 제외하기 위한 runtime command이며, room 참여 상태를 변경하지 않는다.
+
+#### Actor
+
+인증된 WebSocket connection
+
+#### 요청 필드
+
+```text
+roomId
+lastReadSequence optional
+```
+
+connectionId는 request field로 받지 않고 현재 WebSocket connection context에서 얻는다.
+
+lastReadSequence가 제공되면 클라이언트가 room 화면을 떠나기 직전 실제로 확인한 마지막 메시지 sequence로 본다.
+
+#### 사전 조건
+
+```text
+- connection이 존재해야 한다.
+- connection의 인증 상태가 유효해야 한다.
+- roomId가 있어야 한다.
+```
+
+lastReadSequence가 제공되지 않은 경우, room 또는 membership 상태가 이미 변경되었더라도 성공 no-op으로 처리할 수 있다.
+
+lastReadSequence가 제공된 경우에는 markRead와 같은 기준으로 검증한다.
+
+#### 성공 시 상태 변화
+
+```text
+- 현재 connectionId + userId + roomId 기준 ChatReadSession이 있으면 ChatReadSession.runtimeStatus = HIDDEN
+- ChatReadSession이 없거나 이미 HIDDEN이면 성공 no-op
+- lastReadSequence가 제공되고 현재 cursor보다 크면 ChatReadCursor.lastReadSequence 갱신
+- cursor가 실제로 증가한 경우에만 ChatReadCursor.readAt 갱신
+```
+
+#### 관련 이벤트
+
+```text
+없음
+```
+
+ChatReadSession만 HIDDEN으로 변경된 경우 관련 이벤트는 생성하지 않는다.
+
+lastReadSequence로 ChatReadCursor가 실제 증가한 경우 READ_CURSOR_UPDATED, READ_RECEIPT_UPDATED를 생성할 수 있다.
+
+#### Idempotency
+
+별도 idempotency key는 사용하지 않는다.
+
+ChatReadSession이 없거나 이미 HIDDEN이면 성공 no-op으로 처리한다.
+
+lastReadSequence가 현재 cursor보다 작거나 같은 경우 cursor 갱신은 성공 no-op으로 처리한다.
+
+#### 실패 기준
+
+```text
+- connection이 존재하지 않는다.
+- connection 인증 상태가 유효하지 않다.
+- roomId가 없다.
+- lastReadSequence가 제공된 경우 markRead 기준 검증에 실패한다.
+```
 
 ---
 
