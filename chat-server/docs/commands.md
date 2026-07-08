@@ -106,18 +106,24 @@ unsubscribeRoom
 
 인증된 USER
 
+ownerUserId는 request body에서 받지 않고 인증 token의 userId를 사용한다.
+
 #### 요청 필드
 
 ```text
 name
-clientRequestId optional
+clientRequestId
 ```
 
 #### 사전 조건
 
 ```text
 - 인증 token이 유효해야 한다.
-- 요청 payload가 유효해야 한다.
+- name이 있어야 한다.
+- name은 빈 문자열 또는 trim 후 빈 문자열이면 안 된다.
+- name은 서비스 정책의 최대 길이 이하여야 한다.
+- clientRequestId가 있어야 한다.
+- actor가 서비스 정책상 room을 생성할 수 있어야 한다.
 ```
 
 #### 성공 시 상태 변화
@@ -126,10 +132,27 @@ clientRequestId optional
 - ChatRoom 생성
 - ChatRoom.status = ACTIVE
 - ChatRoom.operationStatus = NORMAL
-- actor를 ownerUserId로 설정
+- ChatRoom.ownerUserId = authenticatedUser.userId
+- ChatRoom.lastMessageSequence = 0
 - owner의 ChatRoomMembership 생성
+- owner의 ChatRoomMembership.status = ACTIVE
 - owner의 ChatParticipationPeriod 생성
+- owner의 ChatParticipationPeriod.joinedSequence = 0
+- owner의 ChatParticipationPeriod.leftSequence = null
+- owner의 ChatReadCursor.lastReadSequence = 0
 ```
+
+빈 room의 lastMessageSequence는 0이며, 첫 메시지의 roomSequence는 1부터 시작한다.
+
+createRoom에서 owner 참여 상태를 만들 때도 joinRoom과 같은 participation 초기화 규칙을 사용한다.
+
+위 상태 변화와 ROOM_CREATED 이벤트 발행 요청 기록은 같은 DB transaction에서 확정한다.
+
+부분 성공은 허용하지 않는다.
+
+createRoom은 ChatReadSession을 생성하지 않는다.
+
+사용자가 생성된 room 화면을 실제로 보고 있음을 알리는 처리는 activateReadSession에서 수행한다.
 
 #### 관련 이벤트
 
@@ -137,13 +160,35 @@ clientRequestId optional
 ROOM_CREATED
 ```
 
+createRoom 성공 시 ROOM_JOINED는 생성하지 않는다.
+
+owner membership과 participation 생성은 ROOM_CREATED의 결과에 포함한다.
+
 #### Idempotency
 
-정의 예정
+```text
+ownerUserId + clientRequestId
+```
+
+동일 key로 이미 생성된 room이 있으면 새 room을 만들지 않고 기존 room을 반환한다.
+
+동일 key에 같은 `name`이 들어오면 같은 요청으로 본다.
+
+동일 key에 다른 `name`이 들어오면 충돌로 처리한다.
+
+`roomId`, `createdAt`, `ownerUserId`는 서버 생성 또는 인증 기반 값이므로 idempotency payload 비교 기준에 포함하지 않는다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- actor가 서비스 정책상 room을 생성할 수 없다.
+- name이 없다.
+- name이 빈 문자열이거나 trim 후 빈 문자열이다.
+- name이 서비스 정책의 최대 길이를 초과한다.
+- clientRequestId가 없다.
+- 같은 ownerUserId + clientRequestId로 이미 생성된 room이 있고, 기존 요청의 name과 현재 요청의 name이 다르다.
+```
 
 ---
 
@@ -155,7 +200,7 @@ ROOM_CREATED
 
 #### Actor
 
-room owner
+room owner 또는 OPERATOR
 
 #### 요청 필드
 
@@ -167,17 +212,25 @@ roomId
 
 ```text
 - room이 존재해야 한다.
-- room.status == ACTIVE
-- actor가 room owner여야 한다.
+- actor가 room owner 또는 OPERATOR여야 한다.
 ```
 
 #### 성공 시 상태 변화
 
 ```text
-- ChatRoom.status = CLOSED
+- ChatRoom.status == ACTIVE이면 ChatRoom.status = CLOSED
 - ChatRoom.closedAt 기록
-- 열려 있는 ChatParticipationPeriod 종료
+- 열려 있는 모든 ChatParticipationPeriod 종료
+- 각 ChatParticipationPeriod.leftSequence = ChatRoom.lastMessageSequence
+- 해당 room의 모든 ChatReadSession.runtimeStatus = HIDDEN 또는 제거
+- ChatRoom.status == CLOSED이면 성공 no-op
 ```
+
+closeRoom은 room 생명주기를 종료하는 command다.
+
+열려 있는 모든 ChatParticipationPeriod 종료가 확정되어야 room 종료가 완료된 것으로 본다.
+
+leftSequence는 읽음 위치가 아니라 참여 구간 종료 시점을 기록하기 위한 값이다.
 
 #### 관련 이벤트
 
@@ -185,13 +238,23 @@ roomId
 ROOM_CLOSED
 ```
 
+ROOM_CLOSED는 ACTIVE에서 CLOSED로 전환된 경우에만 생성한다.
+
+이미 CLOSED인 room에 대한 재호출에서는 이벤트를 생성하지 않는다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+권한 있는 actor가 이미 CLOSED인 room에 closeRoom을 호출하면 성공 no-op으로 처리한다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- actor가 room owner 또는 OPERATOR가 아니다.
+```
 
 ---
 
@@ -203,7 +266,7 @@ ROOM_CLOSED
 
 #### Actor
 
-OPERATOR 또는 정책상 허용된 actor
+현재 room owner 또는 OPERATOR
 
 #### 요청 필드
 
@@ -218,13 +281,16 @@ targetUserId
 - room이 존재해야 한다.
 - room.status == ACTIVE
 - targetUserId는 해당 room의 ACTIVE member여야 한다.
+- targetUserId != current ownerUserId
 ```
+
+SYSTEM_MANAGED room에서는 OPERATOR가 transferOwner를 수행할 수 있다.
 
 #### 성공 시 상태 변화
 
 ```text
-- ChatRoom.ownerUserId 변경
-- 필요한 경우 ChatRoom.operationStatus 갱신
+- ChatRoom.ownerUserId = targetUserId
+- ChatRoom.operationStatus = NORMAL
 ```
 
 #### 관련 이벤트
@@ -233,13 +299,25 @@ targetUserId
 ROOM_OWNER_TRANSFERRED
 ```
 
+ROOM_OWNER_TRANSFERRED는 ownerUserId가 실제 변경된 경우에만 생성한다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+targetUserId가 현재 owner이면 잘못된 요청으로 보고 실패 처리한다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- actor가 현재 room owner 또는 OPERATOR가 아니다.
+- targetUserId가 없다.
+- targetUserId가 해당 room의 ACTIVE member가 아니다.
+- targetUserId가 현재 ownerUserId와 같다.
+```
 
 ---
 
@@ -247,11 +325,11 @@ ROOM_OWNER_TRANSFERRED
 
 #### 목적
 
-owner 비활성화 등 시스템 또는 운영 판단으로 room을 운영자 조치 필요 상태로 전환한다.
+owner 비활성화 등 시스템 판단으로 room을 운영자 조치 필요 상태로 전환한다.
 
 #### Actor
 
-SYSTEM 또는 OPERATOR
+SYSTEM
 
 #### 요청 필드
 
@@ -265,15 +343,21 @@ reason
 ```text
 - room이 존재해야 한다.
 - room.status == ACTIVE
-- ChatRoom.operationStatus == NORMAL
 - owner가 owner 역할을 수행할 수 없는 상태여야 한다.
 ```
+
+owner가 owner 역할을 수행할 수 없는 상태는 탈퇴, 정지, 삭제, 비활성화 등을 포함한다.
+
+CLOSED room에는 markRoomSystemManaged를 적용하지 않는다.
 
 #### 성공 시 상태 변화
 
 ```text
-- ChatRoom.operationStatus = SYSTEM_MANAGED
+- ChatRoom.operationStatus == NORMAL이면 ChatRoom.operationStatus = SYSTEM_MANAGED
+- ChatRoom.operationStatus == SYSTEM_MANAGED이면 성공 no-op
 ```
+
+SYSTEM_MANAGED room은 기존 ACTIVE member의 메시지 전송과 읽음 처리는 기본 허용하고, 신규 참여는 기본 제한한다.
 
 #### 관련 이벤트
 
@@ -281,13 +365,24 @@ reason
 ROOM_SYSTEM_MANAGED
 ```
 
+ROOM_SYSTEM_MANAGED는 NORMAL에서 SYSTEM_MANAGED로 전환된 경우에만 생성한다.
+
+이미 SYSTEM_MANAGED인 room에 대한 재처리에서는 이벤트를 생성하지 않는다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+동일 owner 비활성화 이벤트가 반복 처리되어도 SYSTEM_MANAGED 상태이면 성공 no-op으로 처리한다.
 
 #### 실패 기준
 
-정의 예정
+```text
+- actor가 SYSTEM이 아니다.
+- room이 존재하지 않는다.
+- room.status != ACTIVE
+- owner가 owner 역할을 수행할 수 없는 상태가 아니다.
+```
 
 ---
 

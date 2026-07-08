@@ -177,6 +177,9 @@ ChatRoomMembership.status:
 - owner는 일반 leaveRoom으로 room을 나가지 않는다.
 - 하나의 ACTIVE room 안에서 같은 userId의 ACTIVE membership은 하나만 존재한다.
 - ACTIVE room의 ACTIVE membership은 하나의 열린 ChatParticipationPeriod를 가진다.
+- ChatParticipationPeriod는 사용자가 ACTIVE member가 되는 시점에 생성된다.
+- createRoom에서는 owner가 ACTIVE member가 되므로 owner의 ChatParticipationPeriod를 생성한다.
+- joinRoom에서는 일반 사용자가 ACTIVE member가 되므로 ChatParticipationPeriod를 생성한다.
 - LEFT membership은 열린 ChatParticipationPeriod를 가질 수 없다.
 - 열린 ChatParticipationPeriod는 leftSequence가 없다.
 - ChatParticipationPeriod.joinedSequence는 입장 처리 시점의 room.lastMessageSequence다.
