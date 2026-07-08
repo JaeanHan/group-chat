@@ -4,13 +4,13 @@
 
 본 문서는 공용 오픈 채팅방 모듈에서 Outbox Pattern을 사용하는 기준을 정의한다.
 
-Outbox는 메시지 저장과 실시간 전달 사이의 장애를 흡수하기 위한 전달 보장 장치다.
+Outbox는 DB에 확정된 변경을 WebSocket broadcast 경로로 전달하기 위한 DB 기반 relay queue다.
 
-Outbox는 message broker가 아니라 DB 기반 durable relay queue다.
+본 모듈은 message broker를 사용하지 않으므로, OutboxEvent를 통해 전달해야 할 작업을 DB에 기록한다.
+
+OutboxEvent는 채팅 메시지나 방 상태 자체가 아니라, 이미 확정된 변경을 client에게 전파하기 위한 인프라 모델이다.
 
 WebSocket은 client delivery channel이다.
-
-Outbox는 DB에 확정된 상태 변경을 WebSocket broadcast 경로로 전달하기 위한 작업 목록을 보존한다.
 
 ```text
 sendMessage transaction
