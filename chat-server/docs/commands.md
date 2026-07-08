@@ -314,16 +314,26 @@ roomId
 ```text
 - room이 존재해야 한다.
 - room.status == ACTIVE
-- ChatRoom.operationStatus에서 참여가 허용되어야 한다.
+- ChatRoom.operationStatus != SYSTEM_MANAGED
 ```
+
+SYSTEM_MANAGED room은 기존 ACTIVE member의 메시지 전송과 읽음 처리는 기본 허용하지만, 신규 참여는 기본 제한한다.
+
+단, 서비스 정책 또는 운영 판단에 따라 SYSTEM_MANAGED room의 신규 참여를 허용할 수 있다.
 
 #### 성공 시 상태 변화
 
 ```text
+- ChatRoomMembership이 없으면 새로 생성
 - ChatRoomMembership.status = ACTIVE
 - 새로운 ChatParticipationPeriod 생성
 - joinedSequence = ChatRoom.lastMessageSequence
+- ChatReadCursor.lastReadSequence = joinedSequence로 초기화 또는 보정
 ```
+
+재입장 시 이전 ChatParticipationPeriod를 이어 쓰지 않고 새로운 ChatParticipationPeriod를 생성한다.
+
+createRoom에서 owner 참여 상태를 만들 때도 joinRoom과 같은 participation 초기화 규칙을 사용한다.
 
 #### 관련 이벤트
 
@@ -331,13 +341,41 @@ roomId
 ROOM_JOINED
 ```
 
+ROOM_JOINED는 membership이 새로 ACTIVE가 되거나 LEFT에서 ACTIVE로 전환된 경우에만 생성한다.
+
+이미 ACTIVE인 사용자의 재호출에서는 이벤트를 생성하지 않는다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+현재 ChatRoomMembership 상태를 기준으로 idempotent하게 처리한다.
+
+```text
+membership 없음
+  -> ChatRoomMembership 생성
+  -> ChatParticipationPeriod 생성
+  -> ROOM_JOINED 생성
+
+membership LEFT
+  -> ChatRoomMembership.status = ACTIVE
+  -> 새 ChatParticipationPeriod 생성
+  -> ROOM_JOINED 생성
+
+membership ACTIVE
+  -> 성공 no-op
+  -> 이벤트 생성 안 함
+```
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- ChatRoom.operationStatus == SYSTEM_MANAGED이고 신규 참여가 제한되어 있다.
+- actor가 서비스 정책상 참여할 수 없는 상태다.
+```
 
 ---
 
@@ -355,24 +393,42 @@ room owner가 아닌 ACTIVE member
 
 ```text
 roomId
+lastReadSequence optional
 ```
+
+lastReadSequence가 제공되면 사용자가 방을 나가기 직전 실제로 확인한 마지막 메시지 sequence로 본다.
 
 #### 사전 조건
 
 ```text
 - room이 존재해야 한다.
 - room.status == ACTIVE
-- actor의 ChatRoomMembership.status == ACTIVE
+- actor의 ChatRoomMembership이 존재해야 한다.
 - actor는 room owner가 아니어야 한다.
+- lastReadSequence가 제공된 경우 markRead와 같은 기준으로 검증한다.
 ```
+
+SYSTEM_MANAGED room에서도 ACTIVE member의 leaveRoom은 허용한다.
+
+room.status != ACTIVE이면 실패한다.
+
+단, closeRoom 이후 지연된 leaveRoom 요청은 구현 정책에 따라 성공 no-op으로 처리할 수 있다.
 
 #### 성공 시 상태 변화
 
 ```text
-- ChatRoomMembership.status = LEFT
+- ChatRoomMembership.status == ACTIVE이면 ChatRoomMembership.status = LEFT
 - 현재 열린 ChatParticipationPeriod 종료
 - leftSequence = ChatRoom.lastMessageSequence
+- lastReadSequence가 제공되고 현재 cursor보다 크면 ChatReadCursor.lastReadSequence 갱신
+- cursor가 실제로 증가한 경우에만 ChatReadCursor.readAt 갱신
+- 해당 userId + roomId의 ChatReadSession.runtimeStatus = HIDDEN
+- ChatRoomMembership.status == LEFT이면 성공 no-op
 ```
+
+LEFT 상태에서는 일반 메시지 조회가 불가하지만, 참여 구간 종료 시점을 남기기 위해 leftSequence를 기록한다.
+
+leaveRoom은 room 참여 상태를 변경하는 command이며, room 자체를 종료하지 않는다.
 
 #### 관련 이벤트
 
@@ -380,13 +436,40 @@ roomId
 ROOM_LEFT
 ```
 
+ROOM_LEFT는 ACTIVE에서 LEFT로 전환된 경우에만 생성한다.
+
+이미 LEFT인 사용자의 재호출에서는 이벤트를 생성하지 않는다.
+
+lastReadSequence로 ChatReadCursor가 실제 증가한 경우 READ_CURSOR_UPDATED, READ_RECEIPT_UPDATED를 생성할 수 있다.
+
 #### Idempotency
 
-정의 예정
+별도 idempotency key는 사용하지 않는다.
+
+현재 ChatRoomMembership 상태를 기준으로 idempotent하게 처리한다.
+
+```text
+membership ACTIVE
+  -> ChatRoomMembership.status = LEFT
+  -> ChatParticipationPeriod 종료
+  -> ROOM_LEFT 생성
+
+membership LEFT
+  -> 성공 no-op
+  -> 이벤트 생성 안 함
+```
 
 #### 실패 기준
 
-정의 예정
+```text
+- 인증 token이 유효하지 않다.
+- room이 존재하지 않거나 actor에게 접근 가능하지 않다.
+- room.status != ACTIVE
+- actor의 ChatRoomMembership이 존재하지 않는다.
+- actor가 room owner다.
+- actor의 ChatRoomMembership.status가 ACTIVE 또는 LEFT가 아니다.
+- lastReadSequence가 제공된 경우 markRead 기준 검증에 실패한다.
+```
 
 ---
 
