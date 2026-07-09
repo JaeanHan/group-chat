@@ -6,6 +6,14 @@ Query는 데이터를 조회하기 위한 읽기 작업이다.
 
 Query는 ChatRoom, ChatRoomMembership, ChatMessage, ChatReadCursor 같은 도메인 상태를 변경하지 않는다.
 
+Query가 반환하는 read model은 서버 내부 source of truth가 아니다.
+
+하지만 클라이언트에게 반환된 read model은 해당 조회 시점의 authoritative server response로 취급한다.
+
+클라이언트는 read model을 화면 상태의 기준으로 사용하되, 이후 WebSocket event, command response, 재조회 결과로 갱신될 수 있음을 전제한다.
+
+---
+
 ## 2. Query 작성 형식
 
 각 query는 다음 형식으로 정의한다.
@@ -15,36 +23,184 @@ Query는 ChatRoom, ChatRoomMembership, ChatMessage, ChatReadCursor 같은 도메
 Actor
 입력 필드
 사전 조건
+반환 모델
 조회 기준
 실패 기준
 ```
 
-## 3. Query 목록
+---
 
-### 3.1 채팅방 Queries
+## 3. Read model
+
+Read model은 query 응답을 설명하기 위한 모델이다.
+
+Read model은 ChatRoom, ChatRoomMembership, ChatMessage, ChatReadCursor 같은 원천 도메인 모델을 조합하거나 계산한 결과다.
+
+Read model은 query 실행 시점의 snapshot이다.
+
+서버 내부 도메인 상태가 변경되면 이전에 반환된 read model은 stale해질 수 있다.
+
+클라이언트는 WebSocket event, command response, 재조회 결과를 통해 stale한 read model을 갱신한다.
+
+초기 구현에서는 DB query로 계산할 수 있고, 비용이 커지면 projection 또는 cache로 대체할 수 있다.
+
+### 3.1 RoomSummary
+
+RoomSummary는 방 목록 조회에서 사용하는 room 요약 모델이다.
+
+```text
+RoomSummary:
+  roomId
+  name
+  operationStatus
+  participantCount
+  lastMessagePreview nullable
+  unreadCount
+```
+
+```text
+participantCount:
+  ACTIVE ChatRoomMembership 수
+
+lastMessagePreview:
+  room에서 마지막으로 표시 가능한 메시지의 요약
+  DELETED_BY_USER 메시지는 일반 content를 노출하지 않는다.
+
+unreadCount:
+  현재 사용자의 ChatReadCursor.lastReadSequence 이후 메시지 수
+```
+
+### 3.2 RoomDetail
+
+RoomDetail은 방 상세 조회에서 사용하는 room 상세 모델이다.
+
+```text
+RoomDetail:
+  roomId
+  name
+  owner
+  operationStatus
+  participantCount
+  currentUserParticipationStatus
+```
+
+```text
+OwnerSummary:
+  userId
+  displayName
+```
+
+`currentUserParticipationStatus`는 현재 사용자가 해당 room의 채팅 화면을 사용할 수 있는지 판단하기 위한 조회 응답 상태다.
+
+```text
+currentUserParticipationStatus:
+  JOINED
+  NOT_JOINED
+  LEFT
+  UNAVAILABLE
+```
+
+### 3.3 MessagePage
+
+MessagePage는 메시지 목록 조회와 누락 복구 조회에서 사용하는 메시지 페이지 모델이다.
+
+```text
+MessagePage:
+  roomId
+  messages: MessageReadItem[]
+  hasBefore
+  hasAfter
+```
+
+### 3.4 MessageReadItem
+
+MessageReadItem은 사용자에게 표시할 수 있는 메시지 조회 모델이다.
+
+```text
+MessageReadItem:
+  messageId
+  roomId
+  roomSequence
+  sender
+  clientMessageId
+  type
+  content nullable
+  visibility
+  editVersion
+  sentAt
+  editedAt nullable
+  deletedAt nullable
+  unreadReceiptCount optional
+```
+
+```text
+SenderSummary:
+  userId
+  displayName
+```
+
+`content`는 `visibility == DELETED_BY_USER`인 경우 일반 사용자 응답에서 null 또는 비노출 상태로 반환할 수 있다.
+
+`unreadReceiptCount`는 메시지 옆에 안 읽은 사람 수를 표시하는 경우 포함할 수 있다.
+
+### 3.5 UnreadCountSummary
+
+UnreadCountSummary는 room별 unread count 조회 모델이다.
+
+```text
+UnreadCountSummary:
+  roomId
+  unreadCount
+```
+
+### 3.6 ReadReceiptSummary
+
+ReadReceiptSummary는 메시지별 읽음 표시 조회 모델이다.
+
+```text
+ReadReceiptSummary:
+  messageId
+  roomSequence
+  readReceiptCount
+  unreadReceiptCount
+```
+
+`readReceiptCount`는 해당 메시지를 읽은 참여자 수다.
+
+`unreadReceiptCount`는 해당 메시지를 아직 읽지 않은 표시 대상 참여자 수다.
+
+작성자 본인은 두 count의 표시 대상에서 제외한다.
+
+---
+
+## 4. Query 목록
+
+### 4.1 채팅방 Queries
 
 ```text
 listRooms
 getRoomDetail
 ```
 
-### 3.2 메시지 Queries
+### 4.2 메시지 Queries
 
 ```text
 listMessages
 catchUpMessages
 ```
 
-### 3.3 읽음 상태와 표시 Queries
+### 4.3 읽음 상태와 표시 Queries
 
 ```text
 getUnreadCounts
 getReadReceiptCount
 ```
 
-## 4. 채팅방 Queries
+---
 
-### 4.1 listRooms
+## 5. 채팅방 Queries
+
+### 5.1 listRooms
 
 #### 목적
 
@@ -70,6 +226,12 @@ limit
 - cursor가 제공된 경우 서버가 발급한 유효한 cursor여야 한다.
 ```
 
+#### 반환 모델
+
+```text
+RoomSummary[]
+```
+
 #### 조회 기준
 
 ```text
@@ -90,7 +252,7 @@ limit
 
 ---
 
-### 4.2 getRoomDetail
+### 5.2 getRoomDetail
 
 #### 목적
 
@@ -114,12 +276,18 @@ roomId
 - room.status == ACTIVE
 ```
 
+#### 반환 모델
+
+```text
+RoomDetail
+```
+
 #### 조회 기준
 
 ```text
 - CLOSED room은 일반 사용자 상세 조회에서 제외한다.
 - SYSTEM_MANAGED room은 서비스 정책에 따라 상세 조회 가능 여부가 달라질 수 있다.
-- room의 현재 참여자 수, 마지막 메시지 요약, owner 정보 등의 노출 여부는 서비스 정책에 따른다.
+- RoomDetail은 owner, participantCount, currentUserParticipationStatus를 포함한다.
 ```
 
 #### 실패 기준
@@ -132,9 +300,11 @@ roomId
 - 서비스 정책상 actor가 해당 room 상세를 조회할 수 없다.
 ```
 
-## 5. 메시지 Queries
+---
 
-### 5.1 listMessages
+## 6. 메시지 Queries
+
+### 6.1 listMessages
 
 #### 목적
 
@@ -163,6 +333,12 @@ limit
 - limit은 1 이상이어야 한다.
 - limit은 서비스 정책의 최대 조회 개수 이하여야 한다.
 - beforeSequence와 afterSequence를 동시에 제공하지 않는다.
+```
+
+#### 반환 모델
+
+```text
+MessagePage
 ```
 
 #### 조회 기준
@@ -195,7 +371,7 @@ limit
 
 ---
 
-### 5.2 catchUpMessages
+### 6.2 catchUpMessages
 
 #### 목적
 
@@ -226,6 +402,12 @@ limit
 - limit은 서비스 정책의 최대 조회 개수 이하여야 한다.
 ```
 
+#### 반환 모델
+
+```text
+MessagePage
+```
+
 #### 조회 기준
 
 ```text
@@ -250,9 +432,11 @@ limit
 - limit이 없거나 허용 범위를 벗어난다.
 ```
 
-## 6. 읽음 상태와 표시 Queries
+---
 
-### 6.1 getUnreadCounts
+## 7. 읽음 상태와 표시 Queries
+
+### 7.1 getUnreadCounts
 
 #### 목적
 
@@ -273,6 +457,12 @@ roomIds optional
 ```text
 - 인증 token이 유효해야 한다.
 - roomIds가 제공된 경우 중복 roomId는 하나로 취급한다.
+```
+
+#### 반환 모델
+
+```text
+UnreadCountSummary[]
 ```
 
 #### 조회 기준
@@ -296,7 +486,7 @@ roomIds optional
 
 ---
 
-### 6.2 getReadReceiptCount
+### 7.2 getReadReceiptCount
 
 #### 목적
 
@@ -323,6 +513,12 @@ messageId
 - message가 존재해야 한다.
 - message.roomId == roomId
 - message.roomSequence가 현재 ChatParticipationPeriod 범위 안에 있어야 한다.
+```
+
+#### 반환 모델
+
+```text
+ReadReceiptSummary
 ```
 
 #### 조회 기준
