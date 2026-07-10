@@ -6,45 +6,53 @@
 
 클라이언트는 서버의 source of truth를 소유하지 않는다.
 
-클라이언트는 서버에서 확인한 정보, 사용자 입력, 진행 중인 요청을 조합해 사용자가 이해할 수 있는 화면을 만든다.
+클라이언트는 외부 상태와 사용자 맥락을 함께 사용해 비즈니스 상태를 만들고, 비즈니스 상태를 다시 인터랙션 상태로 변환해 사용자가 이해할 수 있는 화면을 만든다.
 
 ---
 
 ## 2. 도메인 경계
 
-클라이언트 도메인 경계는 서버에서 받은 정보를 화면의 행동 가능 상태로 해석하는 지점에서 생긴다.
+클라이언트 도메인 경계는 외부에서 확정된 도메인 상태를 사용자 흐름과 interaction으로 해석하는 지점에서 생긴다.
 
-클라이언트는 서버에서 받은 정보를 그대로 노출하지 않고, 진행 중인 요청을 함께 고려해 현재 화면에서 무엇을 보여주고 어떤 interaction을 허용할지 결정한다.
+서버는 room, membership, message 같은 도메인 상태를 확정해 전달하지만, 사용자는 그 값을 직접 읽는 것이 아니라 화면의 흐름과 가능한 행동으로 경험한다.
 
-이 문서는 비즈니스 핵심 요소를 다음 네 관점으로 나누어 설명한다.
+사용자는 현재 자신이 어떤 흐름에 있고, 무엇을 할 수 있으며, 다음에 무엇을 해야 하는지를 기대한다.
+
+따라서 클라이언트는 외부 상태와 사용자 맥락을 함께 사용해 비즈니스 상태를 만들고, 비즈니스 상태를 다시 인터랙션 상태로 변환한다.
 
 ```text
-서버에서 확인한 정보:
-  서버가 query 결과, command 응답, server event로 클라이언트에 알려준 정보.
-  server event는 WebSocket 같은 실시간 연결을 통해 들어올 수 있다.
-  화면 판단의 기준이 되지만, 단독으로 interaction 전체를 결정하지 않는다.
+[외부 상태]
+        \
+         -> [비즈니스 상태] -> [인터랙션 상태]
+        /
+[사용자 맥락]
 
-화면에서 판단한 결과:
-  서버에서 확인한 정보와 진행 중인 요청을 조합해
-  현재 화면에서 무엇을 보여주고 어떤 interaction을 허용할지 판단한 결과.
+외부 상태:
+  클라이언트 밖에서 확정되어 전달된 도메인 상태다.
+  이 문서에서 외부 상태는 query 결과, command 응답, server event를 의미한다.
+  클라이언트는 외부 상태를 임의로 진실로 바꾸지 않는다.
 
-진행 중인 요청:
-  사용자가 실행했지만 아직 서버가 성공/실패를 확정하지 않은 작업.
-  화면에서는 pending, retry, disabled 같은 형태로 드러난다.
+사용자 맥락:
+  사용자가 현재 보고 있는 화면, 입력 중인 값, 스크롤 위치,
+  foreground/background 여부, 방금 실행한 행동처럼
+  클라이언트가 관찰할 수 있는 사용 상황이다.
 
-화면 동작과 표현:
-  화면에서 판단한 결과가 사용자에게 드러나는 방식.
-  이 문서에서는 구체적인 component 상태가 아니라,
-  비즈니스 해석이 UI로 이어진다는 도착점으로만 다룬다.
+비즈니스 상태:
+  외부 상태와 사용자 맥락을 조합해 사용자 흐름으로 해석한 상태다.
+  사용자가 지금 어떤 단계에 있는지, 그 단계가 사용 가능한지 나타낸다.
+
+인터랙션 상태:
+  비즈니스 상태를 바탕으로 현재 화면에서 사용자의 행동을 제어하거나 유도하는 상태다.
+  허용할 행동, 차단할 행동, 유도할 행동을 포함한다.
 ```
 
-이 문서는 비즈니스 핵심 요소별로 서버에서 확인한 정보와 화면에서 판단한 결과의 관계를 우선 다룬다.
+비즈니스 상태는 외부 상태에서 자동으로 파생되는 값이 아니다.
 
-각 비즈니스 요소 섹션에서는 서버에서 확인한 정보와 화면에서 판단한 결과를 중심으로 설명한다.
+같은 외부 상태라도 사용자가 어떤 화면을 보고 있고 어떤 행동을 했는지에 따라 다른 비즈니스 상태로 해석될 수 있다.
 
-진행 중인 요청은 해당 요소의 의미를 바꾸는 경우에만 포함한다.
+이 문서는 비즈니스 핵심 요소별로 외부 상태와 사용자 맥락이 어떤 비즈니스 상태로 해석되고, 그 결과 어떤 인터랙션 상태로 이어지는지 설명한다.
 
-화면 동작과 표현은 각 요소의 최종 도착점으로 전제하되, 구체적인 표현 방식은 이 문서에서 정의하지 않는다.
+진행 중인 요청은 비즈니스 상태나 인터랙션 상태에 영향을 주는 경우에만 포함한다.
 
 ---
 
@@ -58,31 +66,58 @@
 
 클라이언트는 채팅방 정보를 통해 사용자가 어떤 room을 볼 수 있는지, 어떤 room에 들어갈 수 있는지, 어떤 room을 더 이상 사용할 수 없는지 해석한다.
 
-이 판단을 위해 클라이언트는 다음 정보를 사용한다.
+### 3.1 외부 상태
 
 ```text
-ClientRoomSummary:
+RoomSummary:
   roomId
   name
-  accessStatus
   operationStatus
   participantCount
   lastMessagePreview nullable
   unreadCount
 
-ClientRoomDetail:
+RoomDetail:
   roomId
   name
-  accessStatus
   operationStatus
   owner
   participantCount
   currentUserParticipationStatus
 ```
 
-화면에서는 다음 결과를 판단한다.
+### 3.2 사용자 맥락
 
 ```text
+사용자가 room 목록을 보고 있음
+사용자가 room 상세 화면을 보고 있음
+사용자가 room 참여를 시도함
+사용자가 stale한 room 화면에 머무름
+```
+
+### 3.3 비즈니스 상태
+
+```text
+ClientRoomSummary:
+  roomId
+  name
+  operationStatus
+  participantCount
+  lastMessagePreview nullable
+  unreadCount
+  listVisibility
+
+ClientRoomDetail:
+  roomId
+  name
+  owner
+  operationStatus
+  participantCount
+  participationStatus
+  detailAvailability
+  chatAvailability
+  messageInputAvailability
+
 방 목록 표시 여부:
   사용자가 room을 발견할 수 있는가
 
@@ -95,6 +130,27 @@ ClientRoomDetail:
 메시지 입력 가능 여부:
   현재 사용자가 이 room에서 메시지를 보낼 수 있는가
 ```
+
+### 3.4 인터랙션 상태
+
+```text
+허용:
+  room 상세 열기
+  joinRoom 요청
+  채팅 화면 진입
+  sendMessage 요청
+
+차단:
+  CLOSED room 상세 사용
+  참여하지 않은 room의 메시지 입력
+  사용할 수 없는 room의 stale action
+
+유도:
+  참여 전이면 참여 행동을 유도한다.
+  종료된 room이면 사용할 수 없음을 안내한다.
+```
+
+### 3.5 해석 규칙
 
 방 목록에 보인다는 것은 채팅 화면을 사용할 수 있다는 뜻이 아니다.
 
@@ -122,19 +178,40 @@ ClientRoomDetail:
 
 클라이언트는 참여 정보를 통해 참여 전, 참여 중, 나감, 재입장을 서로 다른 사용자 경험으로 해석한다.
 
-이 판단을 위해 클라이언트는 다음 정보를 사용한다.
+### 4.1 외부 상태
+
+```text
+RoomDetail.currentUserParticipationStatus:
+  JOINED
+  NOT_JOINED
+  LEFT
+  UNAVAILABLE
+
+ROOM_JOINED event
+ROOM_LEFT event
+joinRoom command response
+leaveRoom command response
+```
+
+### 4.2 사용자 맥락
+
+```text
+사용자가 room 상세 화면을 보고 있음
+사용자가 채팅 화면에 진입하려고 함
+사용자가 room에서 나가려고 함
+사용자가 나간 room에 다시 접근함
+```
+
+### 4.3 비즈니스 상태
 
 ```text
 ClientParticipation:
   roomId
   status
-  joinedAt optional
-  leftAt optional
-```
+  chatAvailability
+  messageReadAvailability
+  messageWriteAvailability
 
-화면에서는 다음 결과를 판단한다.
-
-```text
 참여 가능 여부:
   room 상세에서 참여 버튼을 보여줄 수 있는가
 
@@ -145,7 +222,25 @@ ClientParticipation:
   현재 채팅 화면을 닫고 이전 참여 구간 메시지를 현재 메시지로 이어 보지 않도록 할 것인가
 ```
 
-참여 요청이 진행 중이면 화면에서 판단한 결과가 달라질 수 있다.
+### 4.4 인터랙션 상태
+
+```text
+허용:
+  joinRoom 요청
+  leaveRoom 요청
+  채팅 화면 진입
+
+차단:
+  참여하지 않은 room의 sendMessage
+  LEFT 상태 room의 메시지 조회 유지
+  이전 참여 구간 메시지 이어 보기
+
+유도:
+  참여 전이면 참여 버튼을 통해 joinRoom을 유도한다.
+  나간 room이면 채팅 화면을 닫거나 재입장 흐름을 유도한다.
+```
+
+### 4.5 진행 중인 요청
 
 ```text
 joinRoom 요청 중:
@@ -154,6 +249,8 @@ joinRoom 요청 중:
 leaveRoom 요청 중:
   채팅 화면 이탈과 구독 정리를 pending으로 표현한다.
 ```
+
+### 4.6 해석 규칙
 
 재입장 후 메시지 조회 범위는 서버가 확정한 현재 참여 구간을 따른다.
 
@@ -179,27 +276,48 @@ leaveRoom 요청 중:
 
 서버에서 확인한 메시지와 서버 확정 전 메시지는 식별자, 순서, 실패 처리 기준이 다르기 때문이다.
 
-서버에서 확인한 메시지는 다음 정보로 다룬다.
+### 5.1 외부 상태
 
 ```text
-ConfirmedMessage:
+MessagePage:
+  roomId
+  messages: MessageReadItem[]
+  hasBefore
+  hasAfter
+
+MessageReadItem:
   messageId
   roomId
+  roomSequence
   sender
-  status
+  clientMessageId
   type
   content nullable
   visibility
-  roomSequence
-  clientMessageId
   editVersion
-  unreadReceiptCount optional
   sentAt
   editedAt nullable
   deletedAt nullable
+  unreadReceiptCount optional
+
+MESSAGE_SENT event
+MESSAGE_EDITED event
+MESSAGE_DELETED_BY_USER event
 ```
 
-메시지 전송 요청은 서버 확정 전에도 화면에 표시되어야 하므로 다음 정보로 다룬다.
+### 5.2 사용자 맥락
+
+```text
+사용자가 채팅 화면을 보고 있음
+사용자가 메시지를 입력 중임
+사용자가 메시지 전송을 실행함
+사용자가 메시지 수정 또는 삭제를 시도함
+사용자가 전송 실패 메시지를 다시 보내려고 함
+```
+
+### 5.3 진행 중인 요청
+
+메시지 전송 요청은 서버 확정 전에도 화면에 표시되어야 하므로 별도 모델로 다룬다.
 
 ```text
 PendingMessage:
@@ -211,11 +329,23 @@ PendingMessage:
   createdAt
 ```
 
-화면에서는 다음 결과를 판단한다.
+### 5.4 비즈니스 상태
 
 ```text
+ClientMessage:
+  messageId optional
+  clientMessageId optional
+  roomId
+  sender
+  status
+  content nullable
+  displayState
+  orderKey
+  editVersion optional
+  unreadReceiptCount optional
+
 표시할 메시지:
-  ConfirmedMessage와 PendingMessage를 함께 고려한 채팅 화면 메시지
+  MessageReadItem과 PendingMessage를 함께 고려한 채팅 화면 메시지
 
 메시지 순서:
   서버가 확정한 room 단위 메시지 순서를 최종 기준으로 사용한다.
@@ -226,6 +356,27 @@ PendingMessage:
 메시지 삭제 가능 여부:
   작성자, 참여 상태, editVersion, 서버 command 결과를 함께 기준으로 판단한다.
 ```
+
+### 5.5 인터랙션 상태
+
+```text
+허용:
+  sendMessage 요청
+  editMessage 요청
+  deleteMessage 요청
+  failed message 재시도
+
+차단:
+  삭제된 메시지 수정
+  현재 참여 구간 밖 메시지 수정/삭제
+  오래된 editVersion 기반 수정/삭제
+
+유도:
+  전송 실패 메시지는 재시도를 유도한다.
+  삭제된 메시지는 일반 content가 아니라 삭제 표시로 이해되게 한다.
+```
+
+### 5.6 해석 규칙
 
 클라이언트는 같은 메시지가 여러 경로로 도착해도 하나의 메시지로 병합해야 한다.
 
@@ -249,7 +400,33 @@ PendingMessage:
 
 클라이언트는 읽음 정보를 통해 room별 unread count와 메시지별 unread receipt count를 사용자가 이해할 수 있는 표시로 해석한다.
 
-이 판단을 위해 클라이언트는 다음 정보를 사용한다.
+### 6.1 외부 상태
+
+```text
+UnreadCountSummary:
+  roomId
+  unreadCount
+
+ReadReceiptSummary:
+  messageId
+  roomSequence
+  readReceiptCount
+  unreadReceiptCount
+
+READ_CURSOR_UPDATED event
+READ_RECEIPT_UPDATED event
+```
+
+### 6.2 사용자 맥락
+
+```text
+사용자가 room 화면을 보고 있음
+사용자가 scroll bottom에 있음
+사용자가 앱을 foreground로 전환함
+사용자가 room을 이탈함
+```
+
+### 6.3 비즈니스 상태
 
 ```text
 ClientReadState:
@@ -258,11 +435,11 @@ ClientReadState:
   readCursor
   readSessionStatus
   unreadCount
-```
 
-화면에서는 다음 결과를 판단한다.
+ClientReadReceipt:
+  messageId
+  unreadReceiptCount
 
-```text
 read cursor:
   사용자가 특정 room에서 읽은 마지막 메시지 위치
 
@@ -273,7 +450,24 @@ unread receipt count:
   메시지 단위로 아직 읽지 않은 대상 참여자 수
 ```
 
-읽음 보정을 위해 클라이언트가 보내는 신호는 다음과 같다.
+### 6.4 인터랙션 상태
+
+```text
+허용:
+  markRead 보정 요청
+  read session 활성화
+  read session 비활성화
+
+차단:
+  read cursor 역행 반영
+  서버가 확정하지 않은 unread count를 최종값처럼 표시
+
+유도:
+  room 진입, foreground, scroll-to-bottom, room leave 시점에 읽음 보정을 유도한다.
+  unread badge와 unread receipt 표시로 읽음 상태를 인지하게 한다.
+```
+
+### 6.5 읽음 보정 신호
 
 ```text
 read session:
@@ -282,6 +476,8 @@ read session:
 markRead:
   클라이언트가 적절한 시점에 보내는 read cursor 보정 요청
 ```
+
+### 6.6 해석 규칙
 
 read cursor의 최종 값은 서버가 확정한다.
 
