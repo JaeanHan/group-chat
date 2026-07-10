@@ -115,14 +115,25 @@ ClientRoomDetail:
   operationStatus
   participantCount
   participationStatus
-  detailAvailability
-  chatAvailability
-  messageInputAvailability
+
+ClientRoomCapability:
+  roomId
+  canOpenDetail
+  canJoin
+  canEnterChat
+  canSendMessage
+  canSubscribe
 
 방 목록 표시 여부:
   사용자가 room을 발견할 수 있는가
 
-방 상세 사용 가능 여부:
+ClientRoomDetail:
+  사용자가 room 정보를 보고 참여 여부를 판단하는 데 필요한 room 상세 정보
+
+ClientRoomCapability:
+  현재 사용자 맥락에서 이 room에 대해 어떤 행동을 할 수 있는지 나타내는 판단 결과
+
+방 상세 열기 가능 여부:
   사용자가 room 정보를 보고 참여 여부를 판단할 수 있는가
 
 채팅 화면 진입 가능 여부:
@@ -157,7 +168,9 @@ ClientRoomDetail:
 
 방 상세를 볼 수 있다는 것도 현재 사용자가 참여 중이라는 뜻이 아니다.
 
-채팅 화면 사용 가능 여부는 채팅방 정보와 현재 사용자의 참여 정보를 함께 기준으로 판단한다.
+채팅 화면 사용 가능 여부와 메시지 입력 가능 여부는 `ClientRoomDetail` 자체가 아니라 `ClientRoomCapability`로 판단한다.
+
+`ClientRoomCapability`는 채팅방 정보, 현재 사용자 참여 정보, 사용자 맥락을 함께 사용해 계산한다.
 
 운영 개입 중인 room은 종료된 room과 다르게 해석한다.
 
@@ -209,9 +222,13 @@ leaveRoom command response
 ClientParticipation:
   roomId
   status
-  chatAvailability
-  messageReadAvailability
-  messageWriteAvailability
+
+ClientParticipationCapability:
+  roomId
+  canReadMessages
+  canWriteMessages
+  canSubscribeRoom
+  canLeaveRoom
 
 참여 가능 여부:
   room 상세에서 참여 버튼을 보여줄 수 있는가
@@ -243,13 +260,32 @@ ClientParticipation:
 
 ### 4.5 진행 중인 요청
 
-```text
-joinRoom 요청 중:
-  참여 버튼과 채팅 화면 진입을 pending으로 표현한다.
+참여 관련 command는 서버 응답 전에도 버튼, 화면 진입, 구독 정리에 영향을 주므로 별도 pending action으로 다룬다.
 
-leaveRoom 요청 중:
-  채팅 화면 이탈과 구독 정리를 pending으로 표현한다.
+```text
+PendingParticipationAction:
+  roomId
+  action
+  status
+  requestedAt
+  failedReason optional
+
+PendingParticipationAction.action:
+  JOIN
+  LEAVE
+
+PendingParticipationAction.status:
+  PENDING
+  FAILED
 ```
+
+`JOIN` pending 중에는 중복 join 요청을 막고, 채팅 화면 진입은 서버 확정 전까지 pending으로 표현한다.
+
+`LEAVE` pending 중에는 메시지 입력과 추가 leave 요청을 막고, 채팅 화면 이탈과 구독 정리를 진행 중 상태로 표현한다.
+
+참여 command가 성공하면 `PendingParticipationAction`을 제거하고 `ClientParticipation`과 `ClientParticipationCapability`를 서버 응답 기준으로 보정한다.
+
+참여 command가 실패하면 `PendingParticipationAction.status`를 `FAILED`로 두고 재시도 또는 실패 안내를 결정한다.
 
 ### 4.6 해석 규칙
 
@@ -258,6 +294,10 @@ leaveRoom 요청 중:
 클라이언트는 모든 room에 대해 참여 전 상태를 미리 만들 필요는 없다.
 
 참여 정보는 room 상세 조회, 참여 command 응답, server event를 통해 필요한 room에 대해서만 해석한다.
+
+메시지 조회, 메시지 전송, room 구독 가능 여부는 `ClientParticipation` 자체가 아니라 `ClientParticipationCapability`로 판단한다.
+
+`ClientParticipationCapability`는 현재 참여 상태, room 상태, 진행 중인 참여 요청, 사용자 맥락을 함께 사용해 계산한다.
 
 ---
 
@@ -487,3 +527,136 @@ read cursor의 최종 값은 서버가 확정한다.
 대신 room enter, foreground, scroll-to-bottom, room leave 같은 적절한 시점에 read cursor 보정을 요청한다.
 
 읽음 관련 실시간 이벤트가 유실되어도 서버 조회 결과로 다시 계산할 수 있어야 한다.
+
+---
+
+## 7. 실시간 연결
+
+실시간 연결은 서버 상태를 빠르게 반영하고 누락을 복구하기 위한 런타임 연결 상태다.
+
+클라이언트에서 실시간 연결은 WebSocket 연결, room 구독, 재연결, 누락 복구, read session을 함께 조율하는 기준이다.
+
+실시간 연결은 서버 source of truth가 아니며, query 결과와 command 응답을 대체하지 않는다.
+
+클라이언트는 실시간 연결 상태를 통해 사용자가 현재 room의 변경을 실시간으로 받을 수 있는지, 재연결 후 누락 복구가 필요한지, read cursor 자동 갱신 대상인지 판단한다.
+
+### 7.1 외부 상태
+
+```text
+WebSocket connection result
+subscribeRoom command response
+unsubscribeRoom command response
+activateReadSession command response
+deactivateReadSession command response
+MESSAGE_SENT / MESSAGE_EDITED / MESSAGE_DELETED_BY_USER event
+READ_CURSOR_UPDATED / READ_RECEIPT_UPDATED event
+catchUpMessages query result
+```
+
+### 7.2 사용자 맥락
+
+```text
+사용자가 채팅 화면에 진입함
+사용자가 채팅 화면을 이탈함
+앱이 foreground/background로 전환됨
+네트워크가 끊기거나 복구됨
+WebSocket이 재연결됨
+server event 누락 가능성이 있음
+```
+
+### 7.3 프론트엔드 도메인 모델
+
+```text
+ClientRealtimeConnection:
+  status
+  lastConnectedAt nullable
+  disconnectedAt nullable
+
+ClientRealtimeConnection.status:
+  CONNECTING
+  CONNECTED
+  RECONNECTING
+  DISCONNECTED
+  AUTH_EXPIRED
+
+ClientRoomSubscription:
+  roomId
+  status
+  lastReceivedSequence nullable
+  catchUpRequired
+
+ClientRoomSubscription.status:
+  SUBSCRIBING
+  SUBSCRIBED
+  UNSUBSCRIBING
+  UNSUBSCRIBED
+  FAILED
+
+ClientReadSession:
+  roomId
+  status
+
+ClientReadSession.status:
+  ACTIVE
+  INACTIVE
+```
+
+### 7.4 인터랙션 규칙
+
+```text
+허용:
+  WebSocket 연결 시도
+  room 구독 요청
+  room 구독 해제 요청
+  catchUpMessages 요청
+  read session 활성화
+  read session 비활성화
+
+차단:
+  인증 만료 상태에서 room 구독 유지
+  구독되지 않은 room의 실시간 event 수신을 전제로 한 화면 갱신
+  catch-up 전 누락 가능 상태를 최종 동기화 상태로 표시
+
+유도:
+  재연결 중이면 실시간 반영이 지연될 수 있음을 표현한다.
+  재연결 후에는 room 재구독과 누락 복구를 유도한다.
+  인증 만료면 재인증 흐름을 유도한다.
+```
+
+### 7.5 해석 규칙
+
+WebSocket이 연결되었다는 것은 특정 room을 구독했다는 뜻이 아니다.
+
+room을 구독했다는 것도 메시지 조회 권한이나 메시지 전송 권한이 있다는 뜻은 아니다.
+
+연결 끊김은 room이 사용할 수 없다는 뜻이 아니다.
+
+연결 끊김은 실시간 반영이 지연될 수 있다는 뜻이며, 최종 상태는 query 결과나 재연결 후 catch-up으로 보정한다.
+
+재연결 후에는 필요한 room을 다시 구독하고, 마지막으로 반영한 `roomSequence` 이후 메시지를 `catchUpMessages`로 복구한다.
+
+`ClientRoomSubscription.lastReceivedSequence`는 클라이언트가 실시간으로 반영한 마지막 메시지 위치를 추적하기 위한 값이다.
+
+`ClientRoomSubscription.catchUpRequired`가 true이면 실시간 이벤트만으로 화면이 최신이라고 판단하지 않는다.
+
+read session은 room 구독과 다르다.
+
+room 구독은 server event를 받기 위한 상태이고, read session은 사용자가 실제로 room 화면을 보고 있어 read cursor 갱신 대상이 될 수 있음을 나타내는 상태다.
+
+같은 room을 구독 중이어도 read session이 inactive이면 자동 읽음 처리 대상으로 보지 않는다.
+
+WebSocket 연결이 끊기면 `subscribeRoom`, `activateReadSession`, `deactivateReadSession`을 보낼 수 없다.
+
+WebSocket 연결이 끊긴 상태에서는 실시간 수신, room 구독, 자동 읽음 처리를 사용할 수 없다.
+
+그러나 WebSocket 연결 끊김만으로 `sendMessage`를 차단하지 않는다.
+
+`sendMessage` 가능 여부는 room 상태, 현재 사용자 참여 상태, command 결과를 기준으로 판단한다.
+
+연결 끊김 중 전송한 메시지는 command 응답 또는 재연결 후 catch-up 결과로 보정한다.
+
+`canSendMessage`는 WebSocket 연결 여부에 직접 의존하지 않는다.
+
+`canSubscribe`는 WebSocket 연결 상태와 room/participation 상태를 함께 기준으로 판단한다.
+
+`canAutoMarkRead`는 WebSocket 연결, room 구독, read session 활성 상태를 함께 기준으로 판단한다.
