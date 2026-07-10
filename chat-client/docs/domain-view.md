@@ -106,7 +106,6 @@ ClientRoomSummary:
   participantCount
   lastMessagePreview nullable
   unreadCount
-  listVisibility
 
 ClientRoomDetail:
   roomId
@@ -124,8 +123,8 @@ ClientRoomCapability:
   canSendMessage
   canSubscribe
 
-방 목록 표시 여부:
-  사용자가 room을 발견할 수 있는가
+ClientRoomSummary:
+  사용자가 목록에서 발견할 수 있는 room 요약 정보
 
 ClientRoomDetail:
   사용자가 room 정보를 보고 참여 여부를 판단하는 데 필요한 room 상세 정보
@@ -492,7 +491,6 @@ ReadReceiptSummary:
   unreadReceiptCount
 
 READ_CURSOR_UPDATED event
-READ_RECEIPT_UPDATED event
 ```
 
 ### 6.2 사용자 맥락
@@ -511,7 +509,6 @@ ClientReadState:
   roomId
   userId
   readCursor
-  unreadCount
 
 ClientReadReceipt:
   messageId
@@ -520,12 +517,22 @@ ClientReadReceipt:
 read cursor:
   사용자가 특정 room에서 읽은 마지막 메시지 위치
 
-unread count:
-  room 단위로 아직 읽지 않은 메시지 수
-
 unread receipt count:
   메시지 단위로 아직 읽지 않은 대상 참여자 수
 ```
+
+read receipt count는 메시지별 독립 읽음 상태가 아니라 read cursor를 기준으로 계산한 파생 결과다.
+
+`READ_CURSOR_UPDATED`는 갱신 전후 read cursor 구간을 포함한다.
+
+```text
+previousReadSequence
+lastReadSequence
+```
+
+클라이언트는 현재 표시 중인 메시지 중 `previousReadSequence < roomSequence <= lastReadSequence` 구간의 unread receipt count를 임시 보정할 수 있다.
+
+최종 read receipt count는 서버 조회 결과로 보정한다.
 
 ### 6.4 인터랙션 규칙
 
@@ -535,7 +542,6 @@ unread receipt count:
 
 차단:
   read cursor 역행 반영
-  서버가 확정하지 않은 unread count를 최종값처럼 표시
 
 유도:
   room 진입, foreground, scroll-to-bottom, room leave 시점에 읽음 보정을 유도한다.
@@ -584,7 +590,7 @@ unsubscribeRoom command response
 activateReadSession command response
 deactivateReadSession command response
 MESSAGE_SENT / MESSAGE_EDITED / MESSAGE_DELETED_BY_USER event
-READ_CURSOR_UPDATED / READ_RECEIPT_UPDATED event
+READ_CURSOR_UPDATED event
 catchUpMessages query result
 ```
 

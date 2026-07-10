@@ -351,6 +351,16 @@ ChatReadSession.runtimeStatus:
 
 `ChatReadCursor.lastReadSequence`는 감소하지 않는다.
 
+`ChatReadCursor.lastReadSequence`가 증가하면 서버는 갱신 전후 구간을 `READ_CURSOR_UPDATED`로 전파할 수 있다.
+
+```text
+previousReadSequence:
+  갱신 전 ChatReadCursor.lastReadSequence
+
+lastReadSequence:
+  갱신 후 ChatReadCursor.lastReadSequence
+```
+
 ### 7.6 unread count
 
 room별 unread count는 현재 사용자의 read cursor 이후 메시지 수로 계산한다.
@@ -384,9 +394,11 @@ readReceiptCount =
 
 ### 7.8 실시간 읽음 표시
 
-`ChatReadCursor`가 갱신되면 서버는 그 결과를 WebSocket으로 room 구독 클라이언트에게 알릴 수 있다.
+`ChatReadCursor`가 갱신되면 서버는 그 결과를 WebSocket으로 클라이언트에게 알릴 수 있다.
 
 이 이벤트는 서버에서 클라이언트로 전달되는 실시간 표시용 이벤트다.
+
+클라이언트는 `previousReadSequence < message.roomSequence <= lastReadSequence` 구간을 사용해 현재 표시 중인 메시지의 unread receipt count를 임시 보정할 수 있다.
 
 읽음 관련 WebSocket 이벤트는 영속 전달 보장 대상이 아니다.
 
@@ -396,7 +408,6 @@ readReceiptCount =
 
 ```text
 READ_CURSOR_UPDATED
-READ_RECEIPT_UPDATED
 ```
 
 ---

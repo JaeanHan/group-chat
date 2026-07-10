@@ -157,6 +157,8 @@ UnreadCountSummary:
 
 ReadReceiptSummary는 메시지별 읽음 표시 조회 모델이다.
 
+ReadReceiptSummary는 메시지별 독립 읽음 상태가 아니라 `ChatReadCursor.lastReadSequence`를 기준으로 계산한 파생 결과다.
+
 ```text
 ReadReceiptSummary:
   messageId
@@ -193,7 +195,7 @@ catchUpMessages
 
 ```text
 getUnreadCounts
-getReadReceiptCount
+getReadReceiptCounts
 ```
 
 ---
@@ -486,11 +488,11 @@ UnreadCountSummary[]
 
 ---
 
-### 7.2 getReadReceiptCount
+### 7.2 getReadReceiptCounts
 
 #### 목적
 
-특정 메시지의 read receipt count를 조회한다.
+현재 표시 중인 메시지 구간의 read receipt count를 서버 계산값으로 보정한다.
 
 #### Actor
 
@@ -500,7 +502,8 @@ ACTIVE member
 
 ```text
 roomId
-messageId
+fromSequence
+toSequence
 ```
 
 #### 사전 조건
@@ -510,22 +513,23 @@ messageId
 - room.status == ACTIVE
 - actor의 ChatRoomMembership.status == ACTIVE
 - 현재 열린 ChatParticipationPeriod가 존재해야 한다.
-- message가 존재해야 한다.
-- message.roomId == roomId
-- message.roomSequence가 현재 ChatParticipationPeriod 범위 안에 있어야 한다.
+- fromSequence와 toSequence가 있어야 한다.
+- fromSequence <= toSequence
+- 조회 구간이 현재 ChatParticipationPeriod 범위 안에 있어야 한다.
 ```
 
 #### 반환 모델
 
 ```text
-ReadReceiptSummary
+ReadReceiptSummary[]
 ```
 
 #### 조회 기준
 
 ```text
-- 조회 시점에 ACTIVE member인 사용자 중 ChatReadCursor.lastReadSequence가 message.roomSequence 이상인 멤버 수를 계산한다.
-- message sender는 read receipt count에서 제외한다.
+- 조회 구간에 포함된 각 메시지에 대해 read receipt count를 계산한다.
+- 조회 시점에 ACTIVE member인 사용자 중 ChatReadCursor.lastReadSequence가 각 message.roomSequence 이상인 멤버 수를 계산한다.
+- 각 message sender는 해당 메시지의 read receipt count에서 제외한다.
 - 같은 userId가 여러 connection으로 접속해 있어도 하나의 reader로 계산한다.
 - 대형 room에서는 projection 또는 cache를 사용할 수 있다.
 ```
@@ -534,7 +538,8 @@ ReadReceiptSummary
 
 ```text
 - roomId가 없다.
-- messageId가 없다.
+- fromSequence 또는 toSequence가 없다.
+- fromSequence > toSequence
 - room이 존재하지 않는다.
 - room.status != ACTIVE
 - actor가 해당 room의 ACTIVE member가 아니다.

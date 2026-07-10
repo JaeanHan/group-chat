@@ -45,7 +45,6 @@ DB 상태 변경을 durable하게 전달하기 위한 이벤트가 아니므로 
 
 ```text
 READ_CURSOR_UPDATED
-READ_RECEIPT_UPDATED
 ```
 
 Direct WebSocket event는 best-effort 전달을 전제로 한다.
@@ -85,7 +84,6 @@ eventType:
   ROOM_OWNER_TRANSFERRED
   ROOM_SYSTEM_MANAGED
   READ_CURSOR_UPDATED
-  READ_RECEIPT_UPDATED
 
 roomId:
   이벤트가 속한 room
@@ -410,9 +408,14 @@ deliveryScope:
 READ_CURSOR_UPDATED payload:
   roomId
   userId
+  previousReadSequence
   lastReadSequence
   readAt
 ```
+
+`previousReadSequence`는 갱신 전 `ChatReadCursor.lastReadSequence`다.
+
+`lastReadSequence`는 갱신 후 `ChatReadCursor.lastReadSequence`다.
 
 클라이언트 적용 기준:
 
@@ -420,45 +423,8 @@ READ_CURSOR_UPDATED payload:
 - 본인 userId의 read cursor를 갱신한다.
 - lastReadSequence가 현재 화면의 read cursor보다 작으면 무시한다.
 - unread count는 갱신된 read cursor를 기준으로 재계산하거나 서버 조회 결과를 따른다.
-```
-
-### 7.2 READ_RECEIPT_UPDATED
-
-`READ_RECEIPT_UPDATED`는 메시지별 read receipt 표시값이 변경되었음을 전파한다.
-
-기본 수신 대상은 해당 room을 구독 중인 클라이언트다.
-
-```text
-deliveryType:
-  DIRECT
-
-deliveryScope:
-  ROOM_SUBSCRIBERS
-```
-
-```text
-READ_RECEIPT_UPDATED payload:
-  roomId
-  receipts:
-    - messageId
-      roomSequence
-      readReceiptCount
-      unreadReceiptCount
-```
-
-`readReceiptCount`는 해당 메시지를 읽은 참여자 수다.
-
-`unreadReceiptCount`는 해당 메시지를 아직 읽지 않은 표시 대상 참여자 수다.
-
-작성자 본인은 두 count의 표시 대상에서 제외한다.
-
-클라이언트 적용 기준:
-
-```text
-- messageId 기준으로 대상 메시지를 찾는다.
-- 대상 메시지가 있으면 메시지 단위 unreadReceiptCount를 갱신한다.
-- 대상 메시지가 없으면 이벤트를 무시할 수 있다.
-- 읽음 이벤트가 유실되어도 메시지 조회 시 서버가 다시 계산한 값으로 보정한다.
+- 현재 표시 중인 메시지 중 previousReadSequence < message.roomSequence <= lastReadSequence 구간에 포함되고 sender가 userId가 아닌 메시지는 unreadReceiptCount를 임시 보정할 수 있다.
+- 이벤트 중복, 유실, reconnect 이후 최종 read receipt count는 getReadReceiptCounts 조회 결과로 보정한다.
 ```
 
 ---
