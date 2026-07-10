@@ -230,14 +230,20 @@ ClientParticipationCapability:
   canSubscribeRoom
   canLeaveRoom
 
+ClientMessageAccessScope:
+  roomId
+  currentParticipationOnly
+  canContinuePreviousMessages
+
 참여 가능 여부:
   room 상세에서 참여 버튼을 보여줄 수 있는가
 
 채팅 화면 사용 가능 여부:
   메시지 조회, 메시지 전송, room 구독을 사용할 수 있는가
 
-나간 room 처리:
-  현재 채팅 화면을 닫고 이전 참여 구간 메시지를 현재 메시지로 이어 보지 않도록 할 것인가
+메시지 조회 범위:
+  현재 참여 구간 메시지만 볼 수 있는가
+  재입장 후 이전 참여 구간 메시지를 현재 메시지로 이어 보지 않아야 하는가
 ```
 
 ### 4.4 인터랙션 규칙
@@ -298,6 +304,10 @@ PendingParticipationAction.status:
 메시지 조회, 메시지 전송, room 구독 가능 여부는 `ClientParticipation` 자체가 아니라 `ClientParticipationCapability`로 판단한다.
 
 `ClientParticipationCapability`는 현재 참여 상태, room 상태, 진행 중인 참여 요청, 사용자 맥락을 함께 사용해 계산한다.
+
+`ClientMessageAccessScope`는 현재 참여 구간 메시지만 조회해야 하는지 나타내는 클라이언트 판단 결과다.
+
+`ClientMessageAccessScope`는 나간 room을 어떻게 표시할지와 분리해서, 메시지 조회 범위 자체를 설명한다.
 
 ---
 
@@ -368,6 +378,11 @@ PendingMessage:
   status
   content
   createdAt
+
+PendingMessage.status:
+  SENDING
+  RETRYING
+  FAILED
 ```
 
 ### 5.4 프론트엔드 도메인 모델
@@ -378,12 +393,21 @@ ClientMessage:
   clientMessageId optional
   roomId
   sender
-  status
   content nullable
   displayState
   orderKey
   editVersion optional
   unreadReceiptCount optional
+
+ClientMessage.displayState:
+  SENT
+  EDITED
+  DELETED
+
+ClientMessageCapability:
+  messageId
+  canEdit
+  canDelete
 
 표시할 메시지:
   MessageReadItem과 PendingMessage를 함께 고려한 채팅 화면 메시지
@@ -392,11 +416,21 @@ ClientMessage:
   서버가 확정한 room 단위 메시지 순서를 최종 기준으로 사용한다.
 
 메시지 수정 가능 여부:
-  작성자, 참여 상태, editVersion, 서버 command 결과를 함께 기준으로 판단한다.
+  작성자, 참여 상태, 메시지 표시 상태, room 사용 가능 여부를 기준으로 사전 판단한다.
 
 메시지 삭제 가능 여부:
-  작성자, 참여 상태, editVersion, 서버 command 결과를 함께 기준으로 판단한다.
+  작성자, 참여 상태, 메시지 표시 상태, room 사용 가능 여부를 기준으로 사전 판단한다.
 ```
+
+`PendingMessage.status`와 `ClientMessage.displayState`는 서로 다른 상태 집합이다.
+
+`PendingMessage.status`는 서버 확정 전 요청 진행 상태를 나타낸다.
+
+`ClientMessage.displayState`는 서버가 확정한 메시지를 화면에 어떻게 표시할지 나타낸다.
+
+`ClientMessageCapability`는 클라이언트가 현재 알고 있는 상태로 수정/삭제 버튼을 보여줄 수 있는지 판단하기 위한 사전 capability다.
+
+최종 수정/삭제 가능 여부는 `editMessage`, `deleteMessage` command 결과로 서버가 확정한다.
 
 ### 5.5 인터랙션 규칙
 
@@ -410,7 +444,6 @@ ClientMessage:
 차단:
   삭제된 메시지 수정
   현재 참여 구간 밖 메시지 수정/삭제
-  오래된 editVersion 기반 수정/삭제
 
 유도:
   전송 실패 메시지는 재시도를 유도한다.
@@ -423,7 +456,11 @@ ClientMessage:
 
 서버 확정 메시지가 도착하면 같은 `clientMessageId`를 가진 임시 메시지를 서버 확정 메시지로 대체한다.
 
-수정/삭제 이벤트가 늦게 도착할 수 있으므로 클라이언트는 메시지 버전을 기준으로 오래된 변경을 무시해야 한다.
+수정/삭제 이벤트가 늦게 도착할 수 있으므로 클라이언트는 `editVersion`을 기준으로 오래된 변경을 무시해야 한다.
+
+`editVersion`은 수정/삭제 버튼 표시 여부를 판단하는 주된 조건이 아니라, 서버 command 요청과 이벤트 병합에서 동시성 충돌을 감지하기 위한 기준이다.
+
+서버가 `editVersion` 충돌을 응답하면 클라이언트는 최신 메시지 상태로 보정해야 한다.
 
 삭제된 메시지는 content를 일반 메시지처럼 노출하지 않는다.
 
@@ -474,7 +511,6 @@ ClientReadState:
   roomId
   userId
   readCursor
-  readSessionStatus
   unreadCount
 
 ClientReadReceipt:
@@ -496,8 +532,6 @@ unread receipt count:
 ```text
 허용:
   markRead 보정 요청
-  read session 활성화
-  read session 비활성화
 
 차단:
   read cursor 역행 반영
@@ -511,12 +545,13 @@ unread receipt count:
 ### 6.5 읽음 보정 신호
 
 ```text
-read session:
-  사용자가 채팅 화면을 보고 있음을 서버에 알리는 런타임 정보
-
 markRead:
   클라이언트가 적절한 시점에 보내는 read cursor 보정 요청
 ```
+
+read session은 읽음 데이터가 아니라 사용자가 room 화면을 보고 있음을 서버에 알리기 위한 런타임 신호다.
+
+read session 상태는 실시간 연결 모델에서 다룬다.
 
 ### 6.6 해석 규칙
 
