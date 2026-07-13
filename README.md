@@ -26,11 +26,14 @@
 
 ## 프론트엔드 설계 문서
 
-1. [core.md](./chat-client/docs/core.md)  
-  오픈 채팅방 프론트엔드의 핵심 UX/상태 원칙을 설명합니다.
+1. [user-flows.md](./chat-client/docs/user-flows.md)  
+  내가 참여한 방 목록, 참여 가능한 방 조회, 방 채팅 페이지에서 사용자가 room을 발견하고 참여하고 메시지를 주고받는 흐름을 정의합니다.
 
-2. [domain-view.md](./chat-client/docs/domain-view.md)  
-  오픈 채팅방의 비즈니스 핵심 요소를 클라이언트가 화면 의미로 해석하는 기준을 정의합니다.
+2. [core.md](./chat-client/docs/core.md)  
+  사용자 흐름에서 반복되는 오픈 채팅방 프론트엔드의 핵심 UX/상태 원칙을 설명합니다.
+
+3. [domain-view.md](./chat-client/docs/domain-view.md)  
+  Core 원칙을 클라이언트 도메인 상태, pending 상태, capability, 보정 기준으로 구체화합니다.
 
 ## 현재 상태
 

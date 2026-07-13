@@ -471,7 +471,7 @@ MessagePage
 
 #### 목적
 
-사용자가 참여 중인 room별 unread count를 조회한다.
+현재 사용자 기준으로 여러 room의 unread count를 한 번에 조회한다.
 
 #### Actor
 
@@ -482,6 +482,12 @@ MessagePage
 ```text
 roomIds optional
 ```
+
+`roomIds`는 조회 범위를 제한하기 위한 요청 필드다.
+
+`roomIds`가 없으면 현재 사용자가 참여 중인 모든 ACTIVE room을 대상으로 조회할 수 있다.
+
+`userId`는 요청으로 받지 않고 인증 정보에서 얻는다.
 
 #### 사전 조건
 
@@ -495,6 +501,8 @@ roomIds optional
 ```text
 UnreadCountSummary[]
 ```
+
+`UnreadCountSummary.roomId`는 응답의 `unreadCount`를 어느 room에 반영할지 식별하기 위한 값이다.
 
 #### 조회 기준
 
