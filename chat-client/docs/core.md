@@ -62,7 +62,7 @@ WebSocket 재연결:
   동기화가 필요한 상태
 
 삭제된 메시지:
-  content를 볼 수 없는 메시지
+  말풍선 자체를 표시하지 않는 메시지
 ```
 
 ### 3.2 서버 확정 상태와 클라이언트 임시 상태를 분리한다
@@ -133,36 +133,20 @@ sync failure:
 접근 생명주기는 사용자가 room을 발견하고, 상세를 확인하고, 접근 가능 여부를 인지하는 흐름이다.
 
 ```text
-NOT_LOADED
-  -- 방 목록 화면 진입 -->
-LIST_LOADING
+NOT_DISCOVERED
+  -- 방 목록에서 발견 -->
+DISCOVERABLE
 
-LIST_LOADING
-  -- 방 목록 조회 성공 -->
-LIST_VISIBLE
-
-LIST_LOADING
-  -- 방 목록 조회 실패 -->
-LIST_LOAD_FAILED
-
-LIST_VISIBLE
-  -- 사용자가 room 선택 -->
-DETAIL_LOADING
-
-DETAIL_LOADING
-  -- room 상세 조회 성공 -->
+DISCOVERABLE
+  -- 사용자가 room 선택 또는 상세 확인 -->
 DETAIL_VISIBLE
 
-DETAIL_LOADING
+DISCOVERABLE or DETAIL_VISIBLE
   -- room 종료 또는 접근 불가 확인 -->
-UNAVAILABLE
-
-DETAIL_VISIBLE
-  -- room 종료 또는 접근 불가 상태로 변경 -->
 UNAVAILABLE
 ```
 
-`LIST_VISIBLE`은 사용자가 접근 가능한 room 목록을 보고 있는 상태다.
+`DISCOVERABLE`은 사용자가 목록에서 room을 발견할 수 있는 상태다.
 
 `DETAIL_VISIBLE`은 사용자가 room 상세를 보고 참여 여부를 결정할 수 있는 상태다.
 
@@ -394,28 +378,20 @@ read cursor 보정 요청 후보 시점은 다음과 같다.
 ```
 
 ```text
-READ_HIDDEN
+NOT_VIEWING
   -- 사용자가 room 화면을 보기 시작 -->
-READ_VISIBLE
+VIEWING
 
-READ_VISIBLE
-  -- read cursor 보정 요청 -->
-READ_SYNC_PENDING
-
-READ_SYNC_PENDING
-  -- read cursor 보정 확정 -->
-READ_SYNCED
-
-READ_SYNC_PENDING
-  -- read cursor 보정 실패 -->
-READ_VISIBLE_WITH_STALE_COUNT
-
-READ_VISIBLE or READ_SYNCED
+VIEWING
   -- room 화면 이탈 또는 화면 비활성화 -->
-READ_HIDDEN
+NOT_VIEWING
 ```
 
 room 화면 진입, room 화면 이탈, 탭 비활성화, 연결 끊김에 따라 바뀔 수 있다.
+
+클라이언트는 room 진입, foreground 복귀, reconnect, scroll-to-bottom, room leave 같은 시점에 read cursor 보정이 필요한지 판단한다.
+
+read cursor 보정이 실패하면 기존 읽음 표시를 즉시 폐기하지 않고 stale한 읽음 상태로 표현할 수 있다.
 
 read cursor 보정이 확정되면 room unread count와 message read receipt count 표시를 보정한다.
 
@@ -510,41 +486,29 @@ DISCONNECTED
 
 WebSocket이 연결되어 있어도 모든 room 이벤트를 받는 것은 아니다.
 
-클라이언트는 사용자가 room 화면을 보고 있는 동안 해당 room 이벤트를 받을 수 있도록 구독 상태를 관리한다.
+클라이언트는 사용자가 room 화면을 보고 있는 동안 해당 room 이벤트를 받을 수 있어야 한다.
 
 ```text
-NOT_SUBSCRIBED
-  -- room 화면 진입 -->
-SUBSCRIBE_PENDING
+NOT_RECEIVING_ROOM_EVENTS
+  -- room 실시간 수신 가능 -->
+RECEIVING_ROOM_EVENTS
 
-SUBSCRIBE_PENDING
-  -- 구독 확정 -->
-SUBSCRIBED
-
-SUBSCRIBE_PENDING
-  -- 구독 실패 -->
-SUBSCRIBE_FAILED
-
-SUBSCRIBED
-  -- room 화면 이탈 -->
-UNSUBSCRIBE_PENDING
-
-UNSUBSCRIBE_PENDING
-  -- 구독 해제 확정 -->
-NOT_SUBSCRIBED
-
-SUBSCRIBED
+RECEIVING_ROOM_EVENTS
   -- 연결 끊김 감지 -->
-SUBSCRIPTION_STALE
+ROOM_EVENTS_STALE
 
-SUBSCRIPTION_STALE
-  -- 재연결 후 room 재구독 확정 -->
-SUBSCRIBED
+ROOM_EVENTS_STALE
+  -- 재연결 후 room 이벤트 수신 복구 -->
+RECEIVING_ROOM_EVENTS
+
+RECEIVING_ROOM_EVENTS
+  -- room 화면 이탈 또는 room 나가기 -->
+NOT_RECEIVING_ROOM_EVENTS
 ```
 
 room 구독은 실시간 이벤트 수신 범위를 결정한다.
 
-room 화면을 이탈하거나 room에서 나가면 구독과 read session을 함께 정리해야 한다.
+room 화면을 이탈하거나 room에서 나가면 실시간 수신과 read session 신호를 함께 정리해야 한다.
 
 ---
 
@@ -606,33 +570,7 @@ sync failed:
 
 ---
 
-## 8. 상태별 허용 동작
-
-클라이언트는 현재 화면 상태에 따라 사용자가 수행할 수 있는 행동을 명확히 제한해야 한다.
-
-최종 권한 판단은 서버가 수행하지만, 클라이언트는 명백히 불가능한 행동을 화면에서 비활성화하거나 제한할 수 있어야 한다.
-
-| 상태 | 사용자에게 보이는 의미 | 주요 허용 동작 |
-| --- | --- | --- |
-| `LIST_LOADING` | 방 목록을 불러오는 중 | 없음 |
-| `LIST_VISIBLE` | 접근 가능한 방 목록을 보는 중 | room 선택 |
-| `LIST_LOAD_FAILED` | 방 목록 조회 실패 | 다시 시도 |
-| `DETAIL_LOADING` | room 상세를 불러오는 중 | 없음 |
-| `DETAIL_VISIBLE` | room 상세를 보고 참여 여부를 결정하는 중 | 참여 |
-| `JOIN_PENDING` | 참여 요청 처리 중 | 중복 참여 비활성화 |
-| `JOINED` | 메시지 화면을 사용할 수 있는 상태 | 메시지 조회, 전송, 본인 메시지 수정/삭제, 나가기 |
-| `LEAVE_PENDING` | 나가기 요청 처리 중 | 메시지 전송 비활성화 |
-| `LEFT` | room을 나간 상태 | 메시지 화면 종료 |
-| `UNAVAILABLE` | room 종료 또는 접근 불가 | 목록으로 돌아가기 |
-| `SENDING` | 메시지 전송 중 | 입력 지속 가능, 동일 메시지 중복 전송 방지 |
-| `FAILED` | 메시지 전송 실패 | 재전송, 실패 메시지 제거 |
-| `RECONNECTING` | 실시간 연결 복구 중 | 기존 메시지 조회 유지 |
-| `CATCH_UP_PENDING` | 누락 데이터 복구 중 | 기존 메시지 조회 유지, 최신 상태 표시 보류 |
-| `CATCH_UP_FAILED` | 누락 데이터 복구 실패 | 복구 재시도 |
-
----
-
-## 9. 실패 처리 원칙
+## 8. 실패 처리 원칙
 
 클라이언트는 실패를 사용자 행동 실패와 동기화 실패로 나누어 처리한다.
 
@@ -678,9 +616,9 @@ sync failed:
 
 ---
 
-## 10. 구현 기준 요약
+## 9. 설계 원칙 요약
 
-다음 기준은 클라이언트 구현 시 반드시 유지해야 한다.
+다음 기준은 클라이언트 설계 전반에서 유지한다.
 
 ```text
 1. 클라이언트는 서버 내부 상태를 그대로 노출하지 않고 사용자 인지 상태로 표현한다.
