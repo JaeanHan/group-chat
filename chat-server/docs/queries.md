@@ -564,7 +564,7 @@ ReadCursorSnapshot
 - 같은 userId가 여러 connection으로 접속해 있어도 하나의 reader로 포함한다.
 - currentUserReaderKey는 actor의 room 단위 readerKey다.
 - readerKey는 서버가 roomId + userId 기준으로 생성한다.
-- 클라이언트는 snapshot과 MessageReadItem.senderReaderKey를 사용해 메시지별 readReceiptCount와 unreadReceiptCount를 계산한다.
+- 클라이언트는 snapshot과 MessageReadItem.senderReaderKey를 사용해 메시지별 readReceiptCount와 derivedUnreadReceiptCount를 계산할 수 있다.
 ```
 
 #### 실패 기준

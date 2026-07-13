@@ -406,13 +406,15 @@ readReceiptCount =
   where reader.readerKey != message.senderReaderKey
   and reader.lastReadSequence >= message.roomSequence
 
-unreadReceiptCount =
+derivedUnreadReceiptCount =
   count(readers)
   where reader.readerKey != message.senderReaderKey
   and reader.lastReadSequence < message.roomSequence
 ```
 
 클라이언트는 서버에서 받은 reader cursor snapshot과 메시지의 `senderReaderKey`를 사용해 메시지별 read receipt count를 계산할 수 있다.
+
+`derivedUnreadReceiptCount`는 서버 영속 모델이 아니라 클라이언트가 reader cursor snapshot으로 파생할 수 있는 표시 값이다.
 
 서버는 `senderReaderKey`를 메시지 작성자의 `roomId + userId` 기준으로 계산해 내려준다.
 
