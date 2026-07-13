@@ -384,6 +384,10 @@ MessagePage
        orderKey:
          서버가 확정한 roomSequence를 메시지 정렬 기준으로 사용한다.
 
+       initialDisplayPosition:
+         firstUnreadSequence가 있으면 첫 번째 안 읽은 메시지를 초기 표시 기준으로 사용한다.
+         firstUnreadSequence가 없으면 최신 메시지 구간의 하단을 초기 표시 기준으로 사용한다.
+
      병합 기준:
        messageId가 같으면 기존 ClientMessage를 갱신한다.
        clientMessageId가 같은 PendingMessage가 있으면 서버 확정 메시지로 대체한다.
@@ -397,6 +401,10 @@ MessagePage
 
 `MessagePage.hasBefore`, `MessagePage.hasAfter`는 이전/이후 메시지 추가 조회 가능 여부를 알려주는 외부 상태다.
 
+`MessagePage.firstUnreadSequence`는 채팅 화면 최초 진입 시 초기 표시 위치를 알려주는 외부 상태다.
+
+방 목록의 `unreadCount`는 읽지 않은 메시지 수 badge를 위한 요약값이며, 클라이언트가 초기 조회 sequence를 직접 계산하는 근거로 사용하지 않는다.
+
 `DELETED_BY_USER` 메시지는 일반 content를 노출하지 않는다.
 
 최종 수정/삭제 가능 여부는 `editMessage`, `deleteMessage` command 결과로 서버가 확정한다.
@@ -404,6 +412,10 @@ MessagePage
 #### 인터랙션 영향
 
 메시지 조회 성공은 해당 room의 채팅 화면을 현재 참여 구간 기준으로 보정한다.
+
+읽지 않은 메시지가 있으면 첫 번째 안 읽은 메시지부터 볼 수 있게 한다.
+
+읽지 않은 메시지가 없으면 최신 메시지를 기준으로 채팅 화면을 연다.
 
 빈 메시지 목록은 room이 사용할 수 없다는 뜻이 아니라, 현재 조회 범위에 표시할 메시지가 없다는 뜻이다.
 
@@ -449,6 +461,8 @@ MessagePage
 #### 반영 기준
 
 `MessagePage`는 누락된 메시지와 room subscription 복구 상태에 반영된다.
+
+`catchUpMessages`에서 `firstUnreadSequence`는 초기 표시 위치로 사용하지 않는다.
 
 ```text
 MessagePage

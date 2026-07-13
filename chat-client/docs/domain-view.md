@@ -332,6 +332,7 @@ PendingParticipationAction.status:
 MessagePage:
   roomId
   messages: MessageReadItem[]
+  firstUnreadSequence nullable
   hasBefore
   hasAfter
 
@@ -413,6 +414,10 @@ ClientMessageCapability:
 
 메시지 순서:
   서버가 확정한 room 단위 메시지 순서를 최종 기준으로 사용한다.
+
+초기 표시 위치:
+  firstUnreadSequence가 있으면 첫 번째 안 읽은 메시지를 기준으로 채팅 화면을 연다.
+  firstUnreadSequence가 없으면 최신 메시지 구간을 기준으로 채팅 화면을 연다.
 
 메시지 수정 가능 여부:
   작성자, 참여 상태, 메시지 표시 상태, room 사용 가능 여부를 기준으로 사전 판단한다.
