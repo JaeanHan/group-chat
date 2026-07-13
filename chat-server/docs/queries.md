@@ -141,6 +141,7 @@ MessageReadItem:
   roomId
   roomSequence
   sender
+  senderReaderKey
   clientMessageId
   type
   content nullable
@@ -149,7 +150,6 @@ MessageReadItem:
   sentAt
   editedAt nullable
   deletedAt nullable
-  unreadReceiptCount optional
 ```
 
 ```text
@@ -160,7 +160,11 @@ SenderSummary:
 
 `content`는 `visibility == DELETED_BY_USER`인 경우 일반 사용자 응답에서 null 또는 비노출 상태로 반환할 수 있다.
 
-`unreadReceiptCount`는 메시지 옆에 안 읽은 사람 수를 표시하는 경우 포함할 수 있다.
+`senderReaderKey`는 메시지 작성자의 room 단위 readerKey다.
+
+클라이언트는 `senderReaderKey`를 read receipt count 계산에서 작성자 본인을 제외하기 위해 사용한다.
+
+클라이언트는 메시지 전송 요청에 `senderReaderKey` 또는 `readerKey`를 보내지 않는다.
 
 ### 3.5 UnreadCountSummary
 
@@ -172,25 +176,29 @@ UnreadCountSummary:
   unreadCount
 ```
 
-### 3.6 ReadReceiptSummary
+### 3.6 ReadCursorSnapshot
 
-ReadReceiptSummary는 메시지별 읽음 표시 조회 모델이다.
+ReadCursorSnapshot은 클라이언트가 메시지별 read receipt count를 계산하기 위한 reader cursor snapshot이다.
 
-ReadReceiptSummary는 메시지별 독립 읽음 상태가 아니라 `ChatReadCursor.lastReadSequence`를 기준으로 계산한 파생 결과다.
+ReadCursorSnapshot은 조회 시점의 ACTIVE member만 포함한다.
 
 ```text
-ReadReceiptSummary:
-  messageId
-  roomSequence
-  readReceiptCount
-  unreadReceiptCount
+ReadCursorSnapshot:
+  roomId
+  currentUserReaderKey
+  readers: ReadCursorSnapshotItem[]
+  generatedAt
+
+ReadCursorSnapshotItem:
+  readerKey
+  lastReadSequence
 ```
 
-`readReceiptCount`는 해당 메시지를 읽은 참여자 수다.
+`currentUserReaderKey`는 현재 actor의 room 단위 readerKey다.
 
-`unreadReceiptCount`는 해당 메시지를 아직 읽지 않은 표시 대상 참여자 수다.
+`readerKey`는 userId가 아니며 UI에 노출하지 않는다.
 
-작성자 본인은 두 count의 표시 대상에서 제외한다.
+같은 room의 같은 userId는 모든 connection에서 같은 `readerKey`를 가진다.
 
 ---
 
@@ -214,7 +222,7 @@ catchUpMessages
 
 ```text
 getUnreadCounts
-getReadReceiptCounts
+getReadCursorSnapshot
 ```
 
 ---
@@ -509,11 +517,11 @@ UnreadCountSummary[]
 
 ---
 
-### 7.2 getReadReceiptCounts
+### 7.2 getReadCursorSnapshot
 
 #### 목적
 
-현재 표시 중인 메시지 구간의 read receipt count를 서버 계산값으로 보정한다.
+room의 메시지별 read receipt count를 클라이언트가 계산할 수 있도록 reader cursor snapshot을 조회한다.
 
 #### Actor
 
@@ -523,8 +531,6 @@ ACTIVE member
 
 ```text
 roomId
-fromSequence
-toSequence
 ```
 
 #### 사전 조건
@@ -534,38 +540,31 @@ toSequence
 - room.status == ACTIVE
 - actor의 ChatRoomMembership.status == ACTIVE
 - 현재 열린 ChatParticipationPeriod가 존재해야 한다.
-- fromSequence와 toSequence가 있어야 한다.
-- fromSequence <= toSequence
-- 조회 구간이 현재 ChatParticipationPeriod 범위 안에 있어야 한다.
 ```
 
 #### 반환 모델
 
 ```text
-ReadReceiptSummary[]
+ReadCursorSnapshot
 ```
 
 #### 조회 기준
 
 ```text
-- 조회 구간에 포함된 각 메시지에 대해 read receipt count를 계산한다.
-- 조회 시점에 ACTIVE member인 사용자 중 ChatReadCursor.lastReadSequence가 각 message.roomSequence 이상인 멤버 수를 계산한다.
-- 각 message sender는 해당 메시지의 read receipt count에서 제외한다.
-- 같은 userId가 여러 connection으로 접속해 있어도 하나의 reader로 계산한다.
-- 대형 room에서는 projection 또는 cache를 사용할 수 있다.
+- 조회 시점의 ACTIVE member만 snapshot에 포함한다.
+- LEFT member는 snapshot에 포함하지 않는다.
+- 같은 userId가 여러 connection으로 접속해 있어도 하나의 reader로 포함한다.
+- currentUserReaderKey는 actor의 room 단위 readerKey다.
+- readerKey는 서버가 roomId + userId 기준으로 생성한다.
+- 클라이언트는 snapshot과 MessageReadItem.senderReaderKey를 사용해 메시지별 readReceiptCount와 unreadReceiptCount를 계산한다.
 ```
 
 #### 실패 기준
 
 ```text
 - roomId가 없다.
-- fromSequence 또는 toSequence가 없다.
-- fromSequence > toSequence
 - room이 존재하지 않는다.
 - room.status != ACTIVE
 - actor가 해당 room의 ACTIVE member가 아니다.
 - 현재 열린 ChatParticipationPeriod가 존재하지 않는다.
-- message가 존재하지 않는다.
-- message.roomId != roomId
-- message.roomSequence가 현재 ChatParticipationPeriod 범위 밖이다.
 ```

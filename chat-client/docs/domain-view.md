@@ -341,6 +341,7 @@ MessageReadItem:
   roomId
   roomSequence
   sender
+  senderReaderKey
   clientMessageId
   type
   content nullable
@@ -349,7 +350,6 @@ MessageReadItem:
   sentAt
   editedAt nullable
   deletedAt nullable
-  unreadReceiptCount optional
 
 MESSAGE_SENT event
 MESSAGE_EDITED event
@@ -393,11 +393,11 @@ ClientMessage:
   clientMessageId optional
   roomId
   sender
+  senderReaderKey optional
   content nullable
   displayState
   orderKey
   editVersion optional
-  unreadReceiptCount optional
 
 ClientMessage.displayState:
   SENT
@@ -414,6 +414,10 @@ ClientMessageCapability:
 
 메시지 순서:
   서버가 확정한 room 단위 메시지 순서를 최종 기준으로 사용한다.
+
+작성자 readerKey:
+  senderReaderKey는 read receipt count 계산에서 작성자 본인을 제외하기 위한 값이다.
+  클라이언트는 메시지 전송 요청에 readerKey를 보내지 않는다.
 
 초기 표시 위치:
   firstUnreadSequence가 있으면 첫 번째 안 읽은 메시지를 기준으로 채팅 화면을 연다.
@@ -476,7 +480,7 @@ ClientMessageCapability:
 
 읽음은 사용자가 특정 room에서 어디까지 읽었는지를 나타내는 기준이다.
 
-클라이언트에서 읽음은 사용자가 대화를 어디까지 확인했는지와 내가 보낸 메시지가 다른 참여자에게 얼마나 도달했는지를 표현하는 기준이다.
+클라이언트에서 읽음은 사용자가 대화를 어디까지 확인했는지와 메시지별로 몇 명이 읽었는지를 표현하는 기준이다.
 
 읽음은 메시지 내용 자체가 아니라 room과 사용자 사이의 진행 상태를 화면에 드러내는 정보다.
 
@@ -489,11 +493,15 @@ UnreadCountSummary:
   roomId
   unreadCount
 
-ReadReceiptSummary:
-  messageId
-  roomSequence
-  readReceiptCount
-  unreadReceiptCount
+ReadCursorSnapshot:
+  roomId
+  currentUserReaderKey
+  readers: ReadCursorSnapshotItem[]
+  generatedAt
+
+ReadCursorSnapshotItem:
+  readerKey
+  lastReadSequence
 
 READ_CURSOR_UPDATED event
 ```
@@ -515,12 +523,21 @@ ClientReadState:
   userId
   readCursor
 
+ClientReadCursorSnapshot:
+  roomId
+  currentUserReaderKey
+  readers
+
 ClientReadReceipt:
   messageId
+  readReceiptCount
   unreadReceiptCount
 
 read cursor:
   사용자가 특정 room에서 읽은 마지막 메시지 위치
+
+readerKey:
+  read receipt count 계산에 사용하는 room 단위 익명 reader 식별자
 
 unread receipt count:
   메시지 단위로 아직 읽지 않은 대상 참여자 수
@@ -528,16 +545,33 @@ unread receipt count:
 
 read receipt count는 메시지별 독립 읽음 상태가 아니라 read cursor를 기준으로 계산한 파생 결과다.
 
-`READ_CURSOR_UPDATED`는 갱신 전후 read cursor 구간을 포함한다.
+`READ_CURSOR_UPDATED`는 갱신된 readerKey와 갱신 전후 read cursor 구간을 포함한다.
 
 ```text
+readerKey
 previousReadSequence
 lastReadSequence
 ```
 
-클라이언트는 현재 표시 중인 메시지 중 `previousReadSequence < roomSequence <= lastReadSequence` 구간의 unread receipt count를 임시 보정할 수 있다.
+클라이언트는 readerKey별 read cursor snapshot을 갱신한 뒤 현재 표시 중인 메시지의 read receipt count를 다시 계산한다.
 
-최종 read receipt count는 서버 조회 결과로 보정한다.
+read cursor snapshot은 `getReadCursorSnapshot` 결과로 교체할 수 있다.
+
+```text
+readReceiptCount =
+  count(snapshot.readers)
+  where reader.readerKey != message.senderReaderKey
+  and reader.lastReadSequence >= message.roomSequence
+
+unreadReceiptCount =
+  count(snapshot.readers)
+  where reader.readerKey != message.senderReaderKey
+  and reader.lastReadSequence < message.roomSequence
+```
+
+클라이언트는 `readerKey`를 UI에 노출하지 않는다.
+
+read-by 사용자 목록 노출은 초기 범위에 포함하지 않는다.
 
 ### 6.4 인터랙션 규칙
 

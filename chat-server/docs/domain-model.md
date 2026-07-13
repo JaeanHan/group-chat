@@ -291,6 +291,16 @@ MESSAGE_DELETED_BY_USER
 
 같은 userId가 여러 connection으로 같은 room을 보고 있어도 read receipt count에서는 하나의 reader로 본다.
 
+`readerKey`는 클라이언트가 메시지별 read receipt count를 계산할 때 사용하는 room 단위 익명 reader 식별자다.
+
+`readerKey`는 서버가 `roomId + userId` 기준으로 생성하며, 같은 room의 같은 userId는 모든 connection에서 같은 `readerKey`를 가진다.
+
+서버 source of truth는 `ChatReadCursor.userId`이며, `readerKey`는 클라이언트 전달용 계산 key다.
+
+클라이언트는 `readerKey`를 UI에 노출하지 않고, read-by 사용자 목록을 만들기 위해 사용하지 않는다.
+
+read-by 사용자 목록 노출은 초기 범위에 포함하지 않으며, 필요하면 권한 검사를 포함한 userId 기반 별도 조회로 설계한다.
+
 ### 7.2 필드
 
 ```text
@@ -330,6 +340,8 @@ ChatReadSession.runtimeStatus:
 - ChatReadCursor.lastReadSequence는 현재 ChatParticipationPeriod 범위 안에서만 갱신된다.
 - ChatReadSession은 ChatReadCursor 자동 갱신 여부를 판단한다.
 - read receipt count는 작성자 본인을 제외한다.
+- read receipt count는 현재 ACTIVE member snapshot을 기준으로 계산한다.
+- LEFT member는 이후 read receipt count 계산 대상에 포함하지 않는다.
 ```
 
 ### 7.5 read cursor 갱신 기준
@@ -354,6 +366,9 @@ ChatReadSession.runtimeStatus:
 `ChatReadCursor.lastReadSequence`가 증가하면 서버는 갱신 전후 구간을 `READ_CURSOR_UPDATED`로 전파할 수 있다.
 
 ```text
+readerKey:
+  갱신된 ChatReadCursor의 room 단위 익명 reader 식별자
+
 previousReadSequence:
   갱신 전 ChatReadCursor.lastReadSequence
 
@@ -376,21 +391,32 @@ message.roomSequence > max(
 
 ### 7.7 read receipt count
 
-메시지별 read receipt count는 해당 room에서 `ChatReadCursor.lastReadSequence`가 메시지의 `roomSequence` 이상인 멤버 수로 계산한다.
+메시지별 read receipt count는 현재 ACTIVE member snapshot에서 `lastReadSequence`가 메시지의 `roomSequence` 이상인 reader 수로 계산한다.
 
-어떤 사용자의 `ChatReadCursor.lastReadSequence`가 특정 메시지의 `roomSequence` 이상이면, 그 사용자는 해당 메시지를 읽은 것으로 본다.
+어떤 reader의 `lastReadSequence`가 특정 메시지의 `roomSequence` 이상이면, 그 reader는 해당 메시지를 읽은 것으로 본다.
 
-작성자 본인은 read receipt count에서 제외한다.
+작성자 본인은 read receipt count에서 제외한다. 작성자가 현재 ACTIVE member snapshot에 없으면 별도 제외 처리는 필요 없다.
 
 ```text
+readers =
+  current ACTIVE member read cursor snapshot
+
 readReceiptCount =
-  count(ChatReadCursor)
-  where roomId = message.roomId
-  and userId != message.senderUserId
-  and lastReadSequence >= message.roomSequence
+  count(readers)
+  where reader.readerKey != message.senderReaderKey
+  and reader.lastReadSequence >= message.roomSequence
+
+unreadReceiptCount =
+  count(readers)
+  where reader.readerKey != message.senderReaderKey
+  and reader.lastReadSequence < message.roomSequence
 ```
 
-대형 room에서 메시지별 read receipt count 계산 비용이 커지는 경우 projection 또는 cache를 둘 수 있다.
+클라이언트는 서버에서 받은 reader cursor snapshot과 메시지의 `senderReaderKey`를 사용해 메시지별 read receipt count를 계산할 수 있다.
+
+서버는 `senderReaderKey`를 메시지 작성자의 `roomId + userId` 기준으로 계산해 내려준다.
+
+클라이언트는 메시지 전송 요청에 `readerKey`를 보내지 않는다.
 
 ### 7.8 실시간 읽음 표시
 
@@ -398,11 +424,17 @@ readReceiptCount =
 
 이 이벤트는 서버에서 클라이언트로 전달되는 실시간 표시용 이벤트다.
 
-클라이언트는 `previousReadSequence < message.roomSequence <= lastReadSequence` 구간을 사용해 현재 표시 중인 메시지의 unread receipt count를 임시 보정할 수 있다.
+클라이언트는 `READ_CURSOR_UPDATED.readerKey`를 기준으로 로컬 reader cursor snapshot을 갱신한다.
+
+`lastReadSequence`가 로컬 snapshot의 해당 `readerKey` 값보다 작거나 같으면 중복 또는 오래된 이벤트로 보고 무시할 수 있다.
+
+snapshot에 없는 `readerKey` 이벤트를 수신하면 해당 room의 snapshot이 stale한 것으로 보고 `getReadCursorSnapshot`으로 교체할 수 있다.
+
+snapshot을 갱신한 뒤 클라이언트는 현재 표시 중인 메시지의 read receipt count를 다시 계산한다.
 
 읽음 관련 WebSocket 이벤트는 영속 전달 보장 대상이 아니다.
 
-읽음 이벤트가 유실되어도 메시지 조회 시 서버가 `ChatReadCursor` 기준으로 read receipt count를 다시 계산해 복구할 수 있다.
+읽음 이벤트가 유실되어도 `getReadCursorSnapshot`으로 reader cursor snapshot을 다시 받아 복구할 수 있다.
 
 ### 7.9 관련 이벤트
 
