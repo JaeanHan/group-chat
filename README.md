@@ -35,6 +35,15 @@
 3. [domain-view.md](./chat-client/docs/domain-view.md)  
   Core 원칙을 클라이언트 도메인 상태, pending 상태, capability, 보정 기준으로 구체화합니다.
 
+4. [queries.md](./chat-client/docs/queries.md)  
+  서버 조회 결과를 클라이언트 도메인 모델에 어떻게 반영하는지 정의합니다.
+
+5. [commands.md](./chat-client/docs/commands.md)  
+  사용자 쓰기 행동과 pending 상태, 서버 확정 결과 반영 기준을 정의합니다.
+
+6. [screen-model.md](./chat-client/docs/screen-model.md)  
+  프론트엔드 도메인 모델을 실제 화면 단위로 조합하는 기준을 정의합니다.
+
 ## 현재 상태
 
 설계 문서를 작성 중입니다.
