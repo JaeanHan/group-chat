@@ -604,6 +604,9 @@ ClientMessage:
   sender
   senderReaderKey
   content nullable
+  sentAt
+  editedAt nullable
+  deletedAt nullable
   displayState
   orderKey
   editVersion
@@ -615,6 +618,8 @@ ClientMessage.displayState:
 ```
 
 `ClientMessage`는 서버 확정 메시지이므로 `messageId`를 반드시 가진다.
+
+초기 범위에서는 `MessageReadItem.type = TEXT`인 메시지만 `ClientMessage`로 해석하며, `type`을 별도 필드로 보관하지 않는다.
 
 서버 확정 전 메시지는 `PendingMessage`로 분리해서 다룬다.
 
@@ -651,6 +656,9 @@ ClientMessage:
 
 MessageReadItem + 채팅 화면 맥락
   -> ClientMessage
+
+MessageReadItem.sentAt / editedAt / deletedAt
+  -> ClientMessage.sentAt / editedAt / deletedAt
 
 MessagePage.firstUnreadSequence
   -> 초기 표시 위치
