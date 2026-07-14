@@ -44,6 +44,9 @@
 6. [screen-model.md](./chat-client/docs/screen-model.md)  
   프론트엔드 도메인 모델을 실제 화면 단위로 조합하는 기준을 정의합니다.
 
+7. [react-state-model.md](./chat-client/docs/react-state-model.md)  
+  화면별 상태를 Query Cache, Mutation Cache, Client Domain Store, Realtime Store, Auth/Router, Component State에 배치하고 React Hook과 렌더링 의존성으로 연결하는 기준을 정의합니다.
+
 ## 현재 상태
 
 설계 문서를 작성 중입니다.
