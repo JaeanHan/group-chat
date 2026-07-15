@@ -458,6 +458,9 @@ DiscoverableRoomDetail(roomId)
 // Returns: 현재 사용자 context
 function useCurrentUser() {}
 
+// Returns: 내가 참여한 방 목록으로 이동하는 command
+function useNavigateToJoinedRooms() {}
+
 /* --- Query Cache --- */
 
 // Internal: getRoomDetail
@@ -470,6 +473,12 @@ function useRoomDetailQuery(roomId) {}
 //          firstUnreadSequence, 이전 메시지 조회 interface
 function useConfirmedMessages(roomId) {}
 
+// Internal: catchUpMessages query selector
+// 읽는 것만으로 query를 실행하지 않는다.
+// retry는 같은 catch-up lifecycle을 다시 시작한다.
+// Returns: { isCatchingUp, error, retry }
+function useRoomCatchUpState(roomId) {}
+
 // Internal: getReadCursorSnapshot query와 message selector
 // Reconciled by: READ_CURSOR_UPDATED
 // Returns: 해당 message의 read receipt 표시 상태
@@ -478,6 +487,7 @@ function useMessageReadReceipt(roomId, message) {}
 /* --- Mutation Cache --- */
 
 // Internal: sendMessage
+// Returns: { execute }
 function useSendMessageCommand(roomId) {}
 
 // Internal: failed PendingMessage의 sendMessage 재실행
@@ -500,7 +510,7 @@ function useEditMessageCommand(roomId, messageId) {}
 function useDeleteMessageCommand(roomId, messageId) {}
 
 // Internal: leaveRoom
-function useLeaveRoomCommand(roomId) {}
+function useLeaveRoomCommand(roomId, { onSuccess }) {}
 
 /* --- Client Domain Store --- */
 
@@ -607,6 +617,7 @@ function useChatRoomLifecycle(roomId) {
       markRead(roomId);
       deactivateReadSession(roomId);
       unsubscribeRoom(roomId);
+      // 현재 active chat room이 roomId와 같을 때만 제거한다.
       clearActiveChatRoomId(roomId);
     };
   }, [roomId]);
@@ -619,10 +630,15 @@ function useChatRoomLifecycle(roomId) {
 
 ```jsx
 function RoomHeader({ roomId }) {
+  const navigateToJoinedRooms =
+    useNavigateToJoinedRooms();
   const roomQuery = useRoomDetailQuery(roomId);
   const pendingParticipation =
     usePendingParticipation(roomId, "LEAVE");
-  const leaveCommand = useLeaveRoomCommand(roomId);
+  const leaveCommand = useLeaveRoomCommand(
+    roomId,
+    { onSuccess: navigateToJoinedRooms },
+  );
 
   const participation = deriveParticipation({
     room: roomQuery.room,
@@ -666,12 +682,13 @@ function RoomHeader({ roomId }) {
 }
 ```
 
-`ConnectionNotice`는 Realtime Store의 connection과 room subscription을 읽어 현재 동기화 상태를 표시한다.
+`ConnectionNotice`는 Realtime Store의 connection과 room subscription, Query Cache의 catch-up query 상태를 읽어 현재 동기화 상태를 표시한다.
 
 ```jsx
 function ConnectionNotice({ roomId }) {
   const connection = useRealtimeConnection();
   const subscription = useRoomSubscription(roomId);
+  const catchUp = useRoomCatchUpState(roomId);
 
   return (
     <ConnectionNoticeView
@@ -680,6 +697,9 @@ function ConnectionNotice({ roomId }) {
       catchUpRequired={
         subscription.catchUpRequired
       }
+      isCatchingUp={catchUp.isCatchingUp}
+      catchUpError={catchUp.error}
+      onRetryCatchUp={catchUp.retry}
     />
   );
 }
@@ -936,12 +956,15 @@ function MessageComposer({ roomId }) {
 
 ### 5.3 leaveRoom 실행과 상태 반영
 
-`useLeaveRoomCommand`는 `useMutation`으로 `leaveRoom`의 실행 상태를 관리한다. Lifecycle callback에서는 사용자의 나가기 요청을 Client Domain Store에 기록하고, 서버 응답에 따라 Query Cache, pending participation, Realtime Store를 정합시킨다.
+`useLeaveRoomCommand`는 `useMutation`으로 `leaveRoom`의 실행 상태를 관리한다. Lifecycle callback에서는 사용자의 나가기 요청을 Client Domain Store에 기록하고, 서버 응답에 따라 Query Cache와 pending participation을 정합시킨다.
 
-`deactivateReadSession`, `unsubscribeRoom`, `clearActiveChatRoomId`는 화면 unmount cleanup에서도 호출될 수 있으므로 같은 room에 반복 적용해도 결과가 달라지지 않아야 한다.
+상태 정합이 끝나면 `onSuccess` callback으로 내가 참여한 방 목록 이동을 실행한다. 이동으로 채팅 화면이 unmount되면 `useChatRoomLifecycle`이 `markRead`, `deactivateReadSession`, `unsubscribeRoom`, `clearActiveChatRoomId`를 순서대로 실행한다.
 
 ```js
-function useLeaveRoomCommand(roomId) {
+function useLeaveRoomCommand(
+  roomId,
+  { onSuccess },
+) {
   const mutation = useMutation({
     mutationFn: () => leaveRoom(roomId),
 
@@ -962,10 +985,7 @@ function useLeaveRoomCommand(roomId) {
       // 나가기 요청이 서버 상태와 정합되었으므로 제거한다.
       removePendingParticipation(roomId, "LEAVE");
 
-      // 더 이상 유지하지 않을 realtime 상태를 정리한다.
-      deactivateReadSession(roomId);
-      unsubscribeRoom(roomId);
-      clearActiveChatRoomId(roomId);
+      onSuccess();
     },
 
     onError: (error) => {
@@ -990,6 +1010,8 @@ function useLeaveRoomCommand(roomId) {
 ### 5.4 sendMessage 실행과 상태 반영
 
 `useSendMessageCommand`는 Mutation Cache의 요청 lifecycle과 Client Domain Store의 `PendingMessage`를 연결한다. command response와 `MESSAGE_SENT` event가 같은 메시지를 각각 확정할 수 있으므로 confirmed message 보정과 pending message 제거는 idempotent하게 수행한다.
+
+여러 `sendMessage` 요청은 이전 요청의 완료를 기다리지 않고 서로 다른 `clientMessageId`로 실행할 수 있다. Mutation Cache는 요청별 실행 lifecycle을 관리하고, 화면에 유지할 메시지별 상태는 `PendingMessage.status`로 읽는다.
 
 ```js
 function useSendMessageCommand(roomId) {
@@ -1026,8 +1048,6 @@ function useSendMessageCommand(roomId) {
   });
 
   return {
-    status: mutation.status,
-    error: mutation.error,
     execute: ({ content }) => {
       mutation.mutate({
         clientMessageId: createClientMessageId(),
@@ -1085,6 +1105,7 @@ function useRetryMessageCommand(
   };
 }
 
+// 5.5에서 중복과 gap 검증을 통과한 event만 적용한다.
 function onMessageSentEvent(message) {
   // Query Cache
   mergeConfirmedMessage(message);
@@ -1104,11 +1125,22 @@ function onMessageSentEvent(message) {
 
 active chat room 변경은 `onActiveChatRoomChanged`로, WebSocket 연결 성공은 `onRealtimeConnected`로 전달한다. 두 event는 현재 room 하나를 같은 realtime 복구 흐름으로 연결한다.
 
-연결 중 event sequence gap이 감지되면 `onRoomEventGapDetected`가 `catchUpRequired`를 기록하고, 현재 연결과 subscription이 유효하면 즉시 같은 catch-up 흐름을 실행한다.
+연결 중 room event의 roomSequence가 마지막으로 순서대로 반영한 sequence보다 둘 이상 크면 gap으로 판단한다. 이미 반영한 sequence는 무시하고, 바로 다음 sequence만 반영한 뒤 `lastReceivedSequence`를 전진시킨다.
+
+`lastReceivedSequence`가 아직 없으면 catch-up 결과로 기준 sequence를 확정하기 전까지 room event를 직접 적용하지 않는다. `onMessageSentEvent`에는 이 sequence 검증을 통과한 event만 전달한다.
+
+gap이 감지되면 `onRoomEventGapDetected`가 `catchUpRequired`와 관찰한 `catchUpTargetSequence`를 기록하고, 현재 연결과 subscription이 유효하면 즉시 같은 catch-up 흐름을 실행한다.
 
 `catchUpRoom`은 React 외부의 realtime event handler에서 실행되므로 Hook 대신 `QueryClient`로 query lifecycle을 시작한다.
 
+같은 room의 catch-up query가 실행 중이면 중복 요청을 시작하지 않는다. catch-up 실행 이후 새로운 gap이 감지되면 먼저 시작한 요청의 성공 결과로 그 gap의 `catchUpRequired`를 제거하지 않는다.
+
+catch-up 성공 후 `catchUpRequired`가 유지되어 있으면 갱신된 sequence를 기준으로 catch-up을 이어서 실행한다. catch-up 실패 시 `catchUpRequired`와 Query Cache error를 유지하며, `useRoomCatchUpState(roomId).retry`가 같은 coordinator를 다시 실행한다.
+
 ```js
+// React 외부에서 같은 catch-up Query Cache의 fetch 상태를 읽는다.
+function isRoomCatchUpFetching(queryClient, roomId) {}
+
 function onRealtimeDisconnected() {
   setRealtimeConnection("RECONNECTING");
 
@@ -1167,8 +1199,11 @@ async function restoreRoomRealtime(
 async function onRoomEventGapDetected(
   queryClient,
   roomId,
+  observedSequence,
 ) {
-  markCatchUpRequired(roomId);
+  markCatchUpRequired(roomId, {
+    observedSequence,
+  });
 
   const connection = getRealtimeConnection();
   if (
@@ -1188,27 +1223,39 @@ async function catchUpRoomIfRequired(
   queryClient,
   roomId,
 ) {
-  const subscription =
-    getRoomSubscription(roomId);
-  if (
-    subscription.status !== "SUBSCRIBED" ||
-    !subscription.catchUpRequired
-  ) {
+  if (isRoomCatchUpFetching(queryClient, roomId)) {
     return;
   }
 
-  await catchUpRoom({
-    queryClient,
-    roomId,
-    afterSequence:
-      subscription.lastReceivedSequence,
-  });
+  while (true) {
+    const subscription =
+      getRoomSubscription(roomId);
+    if (
+      subscription.status !== "SUBSCRIBED" ||
+      !subscription.catchUpRequired
+    ) {
+      return;
+    }
+
+    // Realtime Store가 현재 gap 판단 기준을 catch-up context로 캡처한다.
+    const catchUpContext =
+      beginRoomCatchUp(roomId);
+
+    await catchUpRoom({
+      queryClient,
+      roomId,
+      afterSequence:
+        subscription.lastReceivedSequence,
+      catchUpContext,
+    });
+  }
 }
 
 async function catchUpRoom({
   queryClient,
   roomId,
   afterSequence,
+  catchUpContext,
 }) {
   const result = await queryClient.fetchQuery(
     createCatchUpMessagesQuery({
@@ -1220,13 +1267,18 @@ async function catchUpRoom({
   // 성공한 catch-up 결과를 confirmed message cache에 병합한다.
   mergeConfirmedMessages(result.messages);
 
-  // 성공한 경우에만 gap 상태와 마지막 수신 sequence를 보정한다.
+  // 성공한 경우에만 마지막 수신 sequence를 보정한다.
   // 실패하면 Query Cache에 error가 남고 catchUpRequired는 유지된다.
-  clearCatchUpRequired(roomId);
   advanceLastReceivedSequence(
     roomId,
     result.lastSequence,
   );
+
+  // 시작 이후 더 최신 gap이 없고 target sequence까지 보정한 경우에만 완료한다.
+  completeRoomCatchUp(roomId, {
+    catchUpContext,
+    caughtUpThrough: result.lastSequence,
+  });
 }
 ```
 
@@ -1246,6 +1298,7 @@ ChatAvailabilityBoundary
 ConnectionNotice
   <- realtime connection
   <- 해당 room의 subscription
+  <- 해당 room의 catch-up query state
 
 MessageTimeline
   <- confirmed message query state

@@ -1035,6 +1035,7 @@ ClientRoomSubscription:
   status
   lastReceivedSequence nullable
   catchUpRequired
+  catchUpTargetSequence nullable
 
 ClientRoomSubscription.status:
   SUBSCRIBING
@@ -1044,9 +1045,17 @@ ClientRoomSubscription.status:
   FAILED
 ```
 
-`lastReceivedSequence`는 클라이언트가 실시간으로 반영한 마지막 roomSequence를 추적하기 위한 값이다.
+`lastReceivedSequence`는 클라이언트가 순서대로 반영한 마지막 roomSequence를 추적하기 위한 값이다.
+
+`lastReceivedSequence`가 `null`이면 event sequence의 연속성을 판단할 수 없으므로 event를 직접 적용하지 않고 catch-up 결과로 기준 sequence를 먼저 확정한다.
 
 `catchUpRequired`는 실시간 이벤트만으로 화면이 최신이라고 판단할 수 없는 상태를 나타낸다.
+
+`catchUpTargetSequence`는 gap 감지 시 관찰한 가장 높은 roomSequence이며, catch-up 결과가 누락 구간을 충분히 보정했는지 판단하는 기준이다.
+
+클라이언트는 room event의 roomSequence가 `lastReceivedSequence + 1`보다 크면 gap으로 판단한다. 이미 반영한 sequence는 다시 적용하지 않는다.
+
+catch-up 실행 중 더 새로운 gap이 감지되면 기존 catch-up 성공만으로 `catchUpRequired`를 제거하지 않는다. 이를 위한 실행 version이나 request token은 Realtime Store의 내부 구현으로 둔다.
 
 `ClientReadSession`은 사용자가 room 화면을 보고 있음을 서버에 알리는 런타임 신호 상태다.
 
@@ -1087,8 +1096,10 @@ subscribeRoom/unsubscribeRoom command response
 activateReadSession/deactivateReadSession command response
   -> ClientReadSession
 
-server event 수신
-  -> ClientRoomSubscription.lastReceivedSequence 보정 입력
+roomSequence가 있는 server event 수신
+  -> 다음 sequence이면 lastReceivedSequence 보정 입력
+  -> 이미 반영한 sequence이면 무시
+  -> gap이면 catchUpRequired와 catchUpTargetSequence 보정 입력
 ```
 
 모델 보정:
@@ -1107,7 +1118,9 @@ READ_CURSOR_UPDATED:
 
 catchUpMessages:
   누락된 message event를 query 결과로 보정한다.
-  catch-up 성공 후 catchUpRequired를 false로 보정할 수 있다.
+  lastReceivedSequence를 서버가 확정한 sequence까지 전진시킨다.
+  현재 catch-up context가 유효하고 target sequence까지 보정했으면
+  catchUpRequired를 false로, catchUpTargetSequence를 null로 보정한다.
 ```
 
 실시간 이벤트가 도착했다는 사실만으로 query 결과보다 최신이라고 단정하지 않는다.
