@@ -103,11 +103,9 @@ outbound queue 지속 증가 없음
 전송 오류 및 send buffer 초과 없음
 ```
 
-## 외부 브로커 도입 시점
+#### 외부 브로커 도입 시점
 
-외부 브로커는 현재의 WebSocket 팬아웃 비용을 제거하지 않는다. 최종적으로 Spring 서버가 각 클라이언트 WebSocket에 메시지를 전송해야 하기 때문이다.
-
-다음 요구사항이 발생할 때 RabbitMQ 또는 Redis Pub/Sub 도입을 검토한다.
+다음 요구사항이 발생할 때 RabbitMQ 또는 Redis Pub/Sub 도입을 검토합니다.
 
 - 채팅 서버를 2대 이상으로 수평 확장
 - 무중단 배포를 위해 다중 채팅 서버 운영
