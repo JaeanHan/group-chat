@@ -89,8 +89,7 @@ Spring Simple Broker가 서버 프로세스 내부에서 방별 구독 정보와
 - 방별 지속 5 msg/s, 짧은 burst 10 msg/s
 - 메시지 본문 및 STOMP frame 크기 제한
 - 느린 클라이언트의 send buffer와 send time 제한
-- `typing`, `presence` 이벤트 throttle 및 병합
-- MongoDB 저장 후 WebSocket broadcast
+- `typing`, `read receipt`, `presence` 이벤트 throttle 및 병합
 - `roomSequence` 기반 누락 메시지 복구
 
 부하 시험에서는 최소한 다음 조건을 검증합니다.
@@ -103,17 +102,7 @@ outbound queue 지속 증가 없음
 전송 오류 및 send buffer 초과 없음
 ```
 
-#### 외부 브로커 도입 시점
-
-다음 요구사항이 발생할 때 RabbitMQ 또는 Redis Pub/Sub 도입을 검토합니다.
-
-- 채팅 서버를 2대 이상으로 수평 확장
-- 무중단 배포를 위해 다중 채팅 서버 운영
-- 서로 다른 서버에 연결된 사용자 간 메시지 전달
-- 독립적인 분석·모더레이션 소비자 연결
-- 단일 서버의 검증된 안전 처리량 초과
-
-현재 예상 지속 피크는 약 **2,500 deliveries/s, 11~20Mbps**이므로, 부하 시험을 통과한다면 단일 Spring Boot 서버의 WebSocket/STOMP 직접 연결 구조로 충분합니다.
+현재 예상 지속 피크는 약 **2,500 deliveries/s, 11~20Mbps**이므로, 부하 시험을 통과한다면 단일 Spring Boot 서버의 WebSocket/STOMP 직접 연결 구조를 사용할 수 있습니다.
 
 
 ## 현재 상태
